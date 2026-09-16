@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import {
   Archive, BookOpenCheck, Check, ChevronDown, CircleHelp, Code2, FileSearch,
   FolderSearch2, GraduationCap, Menu, MessageSquareText, PanelLeftClose,
@@ -14,6 +14,7 @@ import {
   Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
 } from "@/components/ui/sheet"
 import { toast } from "sonner"
+import { TrainingView } from "@/components/training-views"
 
 type Evidence = {
   id: string
@@ -73,7 +74,7 @@ function EvidenceBody({ item }: { item: Evidence }) {
         <div><dt>抓取时间</dt><dd>{item.fetched}</dd></div>
         <div><dt>原文位置</dt><dd>{item.location}</dd></div>
       </dl>
-      <Button className="w-full" render={<a href={item.url} />}>打开演示原文片段</Button>
+      <Button className="w-full" nativeButton={false} render={<a href={item.url} />}>打开演示原文片段</Button>
       <p className="privacy-note"><ShieldCheck /> 此来源仅存在于当前演示工作区。</p>
     </div>
   )
@@ -83,8 +84,18 @@ export function Workspace() {
   const [active, setActive] = useState<(typeof nav)[number][0]>("profile")
   const [selectedId, setSelectedId] = useState("E01")
   const [mobileEvidence, setMobileEvidence] = useState(false)
+  const [mobileNav, setMobileNav] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
+  const [evidenceCollapsed, setEvidenceCollapsed] = useState(false)
+  const [syncState, setSyncState] = useState<"loading" | "ready" | "failed">("loading")
   const selected = evidence[selectedId]
+
+  useEffect(() => {
+    fetch("/api/bootstrap", { cache: "no-store" })
+      .then((response) => { if (!response.ok) throw new Error(); return response.json() })
+      .then(() => setSyncState("ready"))
+      .catch(() => setSyncState("failed"))
+  }, [])
 
   const openEvidence = (id: string) => {
     setSelectedId(id)
@@ -92,7 +103,7 @@ export function Workspace() {
   }
 
   return (
-    <main className={`workspace ${collapsed ? "sidebar-collapsed" : ""}`}>
+    <main className={`workspace ${collapsed ? "sidebar-collapsed" : ""} ${evidenceCollapsed ? "evidence-collapsed" : ""}`}>
       <aside className="sidebar">
         <div className="brand-row">
           <div className="brand-mark"><GraduationCap /></div>
@@ -115,12 +126,12 @@ export function Workspace() {
             {!collapsed && <><span>调查覆盖</span><strong>6 / 9 字段</strong></>}
             <Progress value={67} />
           </div>
-          {!collapsed && <p>真实服务未配置，不会消耗额度。</p>}
+          {!collapsed && <p>{syncState === "loading" ? "正在恢复当前会话…" : syncState === "failed" ? "会话保存失败，请刷新重试。" : "记录已保存；真实服务未配置。"}</p>}
         </div>
       </aside>
 
       <header className="topbar">
-        <Button variant="ghost" size="icon" className="mobile-menu" onClick={() => setCollapsed(!collapsed)} aria-label="打开导航"><Menu /></Button>
+        <Button variant="ghost" size="icon" className="mobile-menu" onClick={() => setMobileNav(true)} aria-label="打开导航"><Menu /></Button>
         <div className="target-crumb"><span>虚构理工大学</span><i>/</i><span>计算机学院</span><i>/</i><strong>智能科学与技术</strong></div>
         <div className="target-tags">
           <Badge variant="outline">学硕</Badge><Badge variant="outline">夏令营</Badge><Badge variant="secondary">2027 入学</Badge>
@@ -129,6 +140,7 @@ export function Workspace() {
       </header>
 
       <section className="content">
+        {active === "profile" ? <>
         <div className="content-head">
           <div>
             <div className="eyebrow"><FileSearch /> 调查档案 · 结论核对</div>
@@ -186,12 +198,22 @@ export function Workspace() {
             </div>
           </article>
         </div>
+        </> : <TrainingView active={active} openEvidence={openEvidence} />}
       </section>
 
       <aside className="evidence-panel">
-        <div className="panel-head"><div><span>证据抽屉</span><strong>{selected.id}</strong></div><Button variant="ghost" size="icon-sm" aria-label="收起证据"><PanelRightClose /></Button></div>
+        <div className="panel-head"><div><span>证据抽屉</span><strong>{selected.id}</strong></div><Button variant="ghost" size="icon-sm" onClick={() => setEvidenceCollapsed(!evidenceCollapsed)} aria-label={evidenceCollapsed ? "展开证据" : "收起证据"}><PanelRightClose /></Button></div>
         <EvidenceBody item={selected} />
       </aside>
+
+      <Sheet open={mobileNav} onOpenChange={setMobileNav}>
+        <SheetContent side="left" className="w-[min(86vw,320px)] bg-[#111a2d] text-white">
+          <SheetHeader><SheetTitle className="text-white">循证保研</SheetTitle><SheetDescription className="text-[#8d9ab5]">演示工作区 · 所有数据均为虚构</SheetDescription></SheetHeader>
+          <nav className="mobile-nav" aria-label="移动端主导航">
+            {nav.map(([id, label, Icon]) => <button key={id} className={active === id ? "active" : ""} onClick={() => { setActive(id); setMobileNav(false) }}><Icon /><span>{label}</span></button>)}
+          </nav>
+        </SheetContent>
+      </Sheet>
 
       <Sheet open={mobileEvidence} onOpenChange={setMobileEvidence}>
         <SheetContent className="w-[min(92vw,390px)] sm:max-w-[390px]">

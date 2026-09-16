@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { nanoid } from "nanoid"
 import { z } from "zod"
 import { db, workspaceForSession } from "@/lib/db"
-import { trainingRecords } from "@/lib/db/schema"
+import { evidences, trainingRecords } from "@/lib/db/schema"
+import { eq } from "drizzle-orm"
 import { demoReview, reviewWithModel } from "@/lib/adapters/llm"
 import { assertServiceAccess, isDemoMode, requireSession } from "@/lib/session"
 import { safeTrainingResult } from "@/lib/validation"
@@ -27,6 +28,9 @@ export async function POST(request: NextRequest) {
     const workspace = workspaceForSession(sessionId)
     if (!workspace) return NextResponse.json({ error: "工作区不存在，请刷新后重试" }, { status: 404 })
     const input = bodySchema.parse(await request.json())
+    const allowedEvidence = new Set(db.select({ id: evidences.id }).from(evidences).where(eq(evidences.workspaceId, workspace.id)).all().flatMap(({ id }) => [id, id.split(":").pop()!]))
+    const invalidEvidence = input.evidenceIds.find((id) => !allowedEvidence.has(id))
+    if (invalidEvidence) throw new Error(`证据 ID 不存在或不属于当前工作区：${invalidEvidence}`)
     const reviewInput = { module: input.module, answer: input.answer, evidenceIds: input.evidenceIds, question: input.question }
     const review = isDemoMode() ? demoReview(reviewInput) : await reviewWithModel(reviewInput)
     const record = {
