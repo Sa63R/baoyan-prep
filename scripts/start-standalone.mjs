@@ -2,6 +2,10 @@ import { cpSync, existsSync, mkdirSync } from "node:fs"
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
+const projectRoot = process.cwd()
+process.env.DATABASE_URL ||= resolve(projectRoot, "data/baoyan-prep.db")
+process.env.UPLOAD_DIR ||= resolve(projectRoot, "data/uploads")
+
 const standalone = resolve(".next/standalone")
 if (!existsSync(resolve(standalone, "server.js"))) {
   throw new Error("生产构建不存在，请先运行 pnpm build")
