@@ -1,0 +1,25 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      DEMO_MODE: "${DEMO_MODE:-true}"
+      SESSION_SECRET: "${SESSION_SECRET:-change-this-before-public-use-please}"
+      APP_ACCESS_CODE: "${APP_ACCESS_CODE:-change-this-access-code}"
+      LLM_BASE_URL: "${LLM_BASE_URL:-}"
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+      LLM_MODEL: "${LLM_MODEL:-}"
+      TAVILY_API_KEY: "${TAVILY_API_KEY:-}"
+    volumes:
+      - baoyan-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  baoyan-data:
