@@ -12,7 +12,7 @@ export async function DELETE(request: NextRequest) {
   try {
     const workspace = workspaceForSession(requireSession(request))
     if (!workspace) return NextResponse.json({ error: "工作区不存在" }, { status: 404 })
-    const uploadRoot = resolve(process.env.UPLOAD_DIR || "./data/uploads")
+    const uploadRoot = resolve(/* turbopackIgnore: true */ process.env.UPLOAD_DIR || "./data/uploads")
     const target = resolve(uploadRoot, workspace.id)
     if (!target.startsWith(`${uploadRoot}${sep}`)) throw new Error("删除路径校验失败")
     await rm(target, { recursive: true, force: true })

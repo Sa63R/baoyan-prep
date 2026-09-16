@@ -13,7 +13,11 @@ function blockedIpv4(ip: string) {
 
 function blockedIpv6(ip: string) {
   const normalized = ip.toLowerCase()
-  return normalized === "::" || normalized === "::1" || normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe8") || normalized.startsWith("fe9") || normalized.startsWith("fea") || normalized.startsWith("feb") || normalized.startsWith("::ffff:127.") || normalized.startsWith("::ffff:10.")
+  if (normalized.startsWith("::ffff:")) {
+    const mapped = normalized.slice(7)
+    if (isIP(mapped) === 4) return blockedIpv4(mapped)
+  }
+  return normalized === "::" || normalized === "::1" || normalized.startsWith("fc") || normalized.startsWith("fd") || normalized.startsWith("fe8") || normalized.startsWith("fe9") || normalized.startsWith("fea") || normalized.startsWith("feb")
 }
 
 export function isBlockedAddress(address: string) {

@@ -33,6 +33,7 @@ CREATE INDEX IF NOT EXISTS records_workspace_idx ON training_records(workspace_i
 CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, filename TEXT NOT NULL, mime_type TEXT NOT NULL, size INTEGER NOT NULL, storage_path TEXT NOT NULL, extracted_text TEXT NOT NULL, parse_status TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS attachments_workspace_idx ON attachments(workspace_id);
 `)
+sqlite.prepare("UPDATE research_tasks SET status = 'interrupted', updated_at = ? WHERE status IN ('plan','discover','fetch','extract','verify','synthesize')").run(new Date().toISOString())
 
 export const db = drizzle(sqlite, { schema })
 

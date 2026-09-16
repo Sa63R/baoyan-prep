@@ -16,6 +16,8 @@ export async function POST(request: NextRequest) {
   try {
     const workspace = workspaceForSession(requireSession(request))
     if (!workspace) return NextResponse.json({ error: "工作区不存在" }, { status: 404 })
+    const importedPages = db.select().from(sources).where(eq(sources.workspaceId, workspace.id)).all().filter((source) => source.url?.startsWith("http")).length
+    if (importedPages >= 20) throw new Error("当前工作区已达到 20 个页面抽取预算上限")
     const input = schema.parse(await request.json())
     const result = await safeFetchText(input.url)
     const content = result.text.slice(0, 500_000)
@@ -25,7 +27,7 @@ export async function POST(request: NextRequest) {
     if (duplicate) return NextResponse.json({ status: "duplicate", source: duplicate, message: "内容与现有来源相同，未作为独立经历重复计数" })
     const source = {
       id: `src_${nanoid(12)}`, workspaceId: workspace.id, title: input.title || new URL(result.finalUrl).hostname, url: result.finalUrl,
-      author: null, publishedAt: null, fetchedAt: new Date().toISOString(), statedYear: null, scope: null, sourceType: "官网",
+      author: null, publishedAt: null, fetchedAt: new Date().toISOString(), statedYear: null, scope: null, sourceType: "URL 导入（待分类）",
       accessStatus: content.length < 300 ? "partial" : "success", contentRange: `已提取 ${content.length} 字符`, contentHash,
       reprintOf: null, visibility: "private" as const, content,
     }
