@@ -265,7 +265,7 @@ export async function verifyGeneratedQuestionEvidence(input: {
   target: QuestionGenerationInput["target"]
   questions: GeneratedQuestion[]
   sources: QuestionGenerationInput["sources"]
-}, apiKeyOverride?: string) {
+}, apiKeyOverride?: string, options: { signal?: AbortSignal } = {}) {
   const auditable = input.questions.map((question, questionIndex) => ({ ...question, questionIndex })).filter((question) => question.kind !== "generated" || (question.evidenceSourceIndexes?.length || 0) > 0)
   if (!auditable.length) return [] as QuestionEvidenceAudit[]
   const { base, apiKey, model } = modelConfig("deepseek-flash", apiKeyOverride)
@@ -290,7 +290,7 @@ export async function verifyGeneratedQuestionEvidence(input: {
     method: "POST",
     headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(90_000),
+    signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(90_000)]) : AbortSignal.timeout(90_000),
     cache: "no-store",
   })
   if (!response.ok) throw new Error(`DeepSeek 证据复核失败：HTTP ${response.status}`)
@@ -312,7 +312,7 @@ export async function verifyGeneratedQuestionEvidence(input: {
   })
 }
 
-export async function generateQuestionsWithModel(input: QuestionGenerationInput, apiKeyOverride?: string) {
+export async function generateQuestionsWithModel(input: QuestionGenerationInput, apiKeyOverride?: string, options: { signal?: AbortSignal } = {}) {
   const { base, apiKey, model } = modelConfig(input.model, apiKeyOverride)
   const moduleRule = input.module === "coding"
     ? "生成目标院校机试套卷与单题索引。每一项都必须是可实际编程提交的算法题，question 写任务要求，summary 写一行题意；严禁出现口述问答、复习规划、自我介绍或面试回答题。外部题只给摘要和原链接，不复制完整题面。"
@@ -339,7 +339,7 @@ export async function generateQuestionsWithModel(input: QuestionGenerationInput,
     }
     if (base.includes("api.deepseek.com")) body.thinking = { type: thinkingEnabled ? "enabled" : "disabled" }
     const response = await fetch(`${base.replace(/\/$/, "")}/chat/completions`, {
-      method: "POST", headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(120_000), cache: "no-store",
+      method: "POST", headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" }, body: JSON.stringify(body), signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000), cache: "no-store",
     })
     if (!response.ok) throw new Error(`DeepSeek 请求失败：HTTP ${response.status}`)
     const payload = await response.json() as { choices?: { finish_reason?: string; message?: { content?: string } }[] }

@@ -8,7 +8,7 @@
 |---|---|---|
 | TypeScript | `pnpm typecheck` | 通过 |
 | ESLint | `pnpm lint` | 通过 |
-| 单元与组件测试 | `pnpm test` | 8 个文件、46/46 通过 |
+| 单元与组件测试 | `pnpm test` | 9 个文件、51/51 通过 |
 | 研究流程 E2E | Playwright `e2e/research.spec.ts` | 4/4 通过 |
 | 生产构建 | `pnpm build` | 通过 |
 | Railway 部署 | 公开地址访问 | 构建、启动与页面加载通过 |
@@ -26,6 +26,7 @@
 - 结构化响应：只读取 DeepSeek Responses 的 `output_text`，拒绝把 `reasoning_text` 当 JSON。
 - 生成边界：无证据题目必须降级为通用补充或 AI 生成。
 - 研究进度：启动前先选择档位，服务端以 NDJSON 返回阶段、进度、完成或失败事件。
+- 题单生成：候选资料上限、NDJSON 阶段进度、心跳保活、连接提前关闭和网络失败提示。
 - ZIP：项目资料批量导出、链接清单和安全文件名。
 - 输入验证：项目、目标、来源、附件、简历与生成请求边界。
 - 项目隔离：不同学校的目标、资料、研究任务和题单版本分开存储。

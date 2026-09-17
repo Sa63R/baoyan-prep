@@ -8,6 +8,7 @@ import {
   type GeneratedQuestion,
 } from "@/lib/adapters/llm"
 import { sqlite, workspaceForSession } from "@/lib/db"
+import { generationStream, type GenerationResult } from "@/lib/generation-stream"
 import { assertServiceAccess, requireSession } from "@/lib/session"
 import {
   assessCandidateRules,
@@ -23,7 +24,7 @@ import { projectContext, upsertSourceAssessment } from "@/lib/workbench"
 import { questionKinds, validateQuestionProvenance } from "@/lib/validation"
 
 export const runtime = "nodejs"
-export const maxDuration = 120
+export const maxDuration = 300
 
 const schema = z.object({
   projectId: z.string(), targetId: z.string(), module: z.enum(["coding", "interview", "project"]),
@@ -31,6 +32,7 @@ const schema = z.object({
 })
 
 const historicalKinds = new Set<GeneratedQuestion["kind"]>(["official_past", "official_sample", "recalled_past"])
+const sourceLimit = 16
 
 export async function POST(request: NextRequest) {
   try {
@@ -45,9 +47,15 @@ export async function POST(request: NextRequest) {
     const target: TargetDescriptor = { school: context.project.school, ...context.target }
     const assessmentMap = new Map(context.assessments.map((assessment) => [assessment.sourceId, assessment as SourceAssessment]))
 
-    // Existing materials from earlier versions are reviewed lazily the next time a
-    // question set is generated. This upgrades old projects without a destructive migration.
-    const unreviewed = context.sources.filter((source) => !assessmentMap.has(source.id)).map((source, index) => {
+    // Only audit sources that can enter this question set. Older projects may have
+    // dozens of unreviewed sources; reviewing all of them first can outlive the proxy.
+    const candidates = selectSourcesForGeneration(context.sources.map((source) => ({
+      ...source,
+      url: source.url,
+      assessment: assessmentMap.get(source.id),
+    })), target, input.module, sourceLimit)
+    const candidateIds = new Set(candidates.map((source) => source.id))
+    const unreviewed = context.sources.filter((source) => candidateIds.has(source.id) && !assessmentMap.has(source.id)).map((source, index) => {
       const candidate: SourceCandidate = { ...source, url: source.url, origin: source.origin }
       const initialRule = assessCandidateRules(candidate, target)
       const rule = source.origin === "user" && initialRule.hardReject
@@ -56,83 +64,111 @@ export async function POST(request: NextRequest) {
       return { source, candidate, rule, index }
     })
     const reviewable = unreviewed.filter((item) => !item.rule.hardReject).sort((a, b) => b.rule.preliminaryScore - a.rule.preliminaryScore)
-    const reviews = reviewable.length ? await reviewSourceCandidatesWithModel({
-      project: { school: schoolIdentity(context.project.school).canonical },
-      target: context.target,
-      candidates: reviewable.map(({ candidate, rule, index }) => ({ index, title: candidate.title, url: candidate.url, status: candidate.status, ruleSummary: rule.reason, content: prepareCandidatePreview(candidate, target) })),
-    }, apiKey) : []
-    const reviewMap = new Map(reviews.map((review) => [review.index, review]))
-    if (reviewMap.size !== reviewable.length) throw new Error(`DeepSeek 资料审核格式不完整：应返回 ${reviewable.length} 条，实际解析到 ${reviewMap.size} 条`)
-    for (const item of unreviewed) {
-      const assessment = finalizeSourceAssessment(item.candidate, item.rule, reviewMap.get(item.index))
-      upsertSourceAssessment(item.source.id, input.targetId, assessment)
-      assessmentMap.set(item.source.id, assessment)
+
+    const execute = async (signal: AbortSignal, progress: (detail: string) => void): Promise<GenerationResult> => {
+      signal.throwIfAborted()
+      if (reviewable.length) {
+        progress("正在审核候选资料（0/" + reviewable.length + "）")
+        const reviews = await reviewSourceCandidatesWithModel({
+          project: { school: schoolIdentity(context.project.school).canonical },
+          target: context.target,
+          candidates: reviewable.map(({ candidate, rule, index }) => ({
+            index,
+            title: candidate.title,
+            url: candidate.url,
+            status: candidate.status,
+            ruleSummary: rule.reason,
+            content: prepareCandidatePreview(candidate, target),
+          })),
+        }, apiKey, { signal, onProgress: (reviewed, total) => progress("正在审核候选资料（" + reviewed + "/" + total + "）") })
+        const reviewMap = new Map(reviews.map((review) => [review.index, review]))
+        if (reviewMap.size !== reviewable.length) throw new Error("DeepSeek 资料审核格式不完整：应返回 " + reviewable.length + " 条，实际解析到 " + reviewMap.size + " 条")
+        for (const item of unreviewed) {
+          const assessment = finalizeSourceAssessment(item.candidate, item.rule, reviewMap.get(item.index))
+          upsertSourceAssessment(item.source.id, input.targetId, assessment)
+          assessmentMap.set(item.source.id, assessment)
+        }
+      }
+
+      signal.throwIfAborted()
+      const ranked = selectSourcesForGeneration(context.sources.filter((source) => candidateIds.has(source.id)).map((source) => ({
+        ...source,
+        url: source.url,
+        assessment: assessmentMap.get(source.id),
+      })), target, input.module, sourceLimit)
+      const sources = ranked.map((source) => ({
+        id: source.id,
+        title: source.title,
+        url: source.url,
+        sourceType: source.sourceType + " · " + (source.assessment?.evidenceLevel || "未分级"),
+        confidence: source.assessment ? source.assessment.qualityScore + "/100" : source.confidence,
+        content: source.content,
+      }))
+
+      progress("正在根据 " + sources.length + " 条资料生成题单")
+      const result = await generateQuestionsWithModel({
+        module: input.module, model: input.model, thinkingEnabled: input.thinkingEnabled, customPrompt: input.customPrompt,
+        project: { school: context.project.school },
+        target: context.target,
+        sources,
+        resume: context.resume ? String(context.resume.content) : undefined,
+        faculty: context.faculty ? { kind: String(context.faculty.kind), name: String(context.faculty.name), homepage: context.faculty.homepage ? String(context.faculty.homepage) : null, description: context.faculty.description ? String(context.faculty.description) : null } : undefined,
+      }, apiKey, { signal })
+
+      progress("正在复核 " + result.questions.length + " 道题的来源")
+      const audits = await verifyGeneratedQuestionEvidence({
+        project: { school: context.project.school },
+        target: context.target,
+        questions: result.questions,
+        sources,
+      }, apiKey, { signal })
+      const auditMap = new Map(audits.map((audit) => [audit.questionIndex, audit]))
+      signal.throwIfAborted()
+      progress("正在保存题单")
+      const timestamp = new Date().toISOString()
+      const versionId = "qsv_" + nanoid(12)
+      sqlite.transaction(() => {
+        sqlite.prepare("INSERT INTO question_set_versions (id, project_id, target_id, module, title, source_snapshot, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+          .run(versionId, input.projectId, input.targetId, input.module, result.title, JSON.stringify(sources.map(({ id, title, url }) => ({ id, title, url }))), timestamp)
+        const insert = sqlite.prepare("INSERT INTO question_items (id, version_id, position, theme, question, summary, url, kind, tags, evidence_ids, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        result.questions.forEach((question, index) => {
+          const requestedKind = questionKinds.includes(question.kind) ? question.kind : "generated"
+          const requestedIndexes = (question.evidenceSourceIndexes || []).filter((value) => Number.isInteger(value) && value >= 0 && value < sources.length)
+          const audit = auditMap.get(index)
+          let finalKind: GeneratedQuestion["kind"] = requestedKind
+          let evidenceIndexes = requestedIndexes
+          if (historicalKinds.has(requestedKind)) {
+            const directlySupported = Boolean(audit?.supported && audit.supportedEvidenceSourceIndexes.length)
+            if (!directlySupported) finalKind = audit?.maxKind === "generated" ? "generated" : "recommended_practice"
+            else if (audit) finalKind = audit.maxKind
+            evidenceIndexes = audit?.supportedEvidenceSourceIndexes.length ? audit.supportedEvidenceSourceIndexes : requestedIndexes
+          } else if (audit?.supportedEvidenceSourceIndexes.length) evidenceIndexes = audit.supportedEvidenceSourceIndexes
+          const evidenceIds = evidenceIndexes.map((value) => sources[value]?.id).filter((value): value is string => Boolean(value))
+          if (!validateQuestionProvenance(finalKind, evidenceIds[0])) finalKind = "recommended_practice"
+          const citedUrl = evidenceIds.length ? sources.find((source) => source.id === evidenceIds[0])?.url || null : null
+          const knownQuestionUrl = question.url && sources.some((source) => source.url === question.url) ? question.url : null
+          const url = citedUrl || knownQuestionUrl
+          insert.run(
+            "qi_" + nanoid(12),
+            versionId,
+            index,
+            question.theme || "综合",
+            question.question,
+            question.summary || null,
+            url,
+            finalKind,
+            JSON.stringify(question.tags || []),
+            JSON.stringify(evidenceIds),
+            JSON.stringify({ evidenceAudit: audit ? { supported: audit.supported, reason: audit.reason, originalKind: requestedKind } : { supported: !historicalKinds.has(requestedKind), reason: "该题无需历史来源审计", originalKind: requestedKind } }),
+          )
+        })
+        sqlite.prepare("UPDATE prep_projects SET updated_at=? WHERE id=?").run(timestamp, input.projectId)
+      })()
+      return { versionId, title: result.title, count: result.questions.length, model: result.model, sourceCount: sources.length, evidenceAudited: true }
     }
 
-    const ranked = selectSourcesForGeneration(context.sources.map((source) => ({
-      ...source,
-      url: source.url,
-      assessment: assessmentMap.get(source.id),
-    })), target, input.module)
-    const sources = ranked.map((source) => ({
-      id: source.id,
-      title: source.title,
-      url: source.url,
-      sourceType: `${source.sourceType} · ${source.assessment?.evidenceLevel || "未分级"}`,
-      confidence: source.assessment ? `${source.assessment.qualityScore}/100` : source.confidence,
-      content: source.content,
-    }))
-    const result = await generateQuestionsWithModel({
-      module: input.module, model: input.model, thinkingEnabled: input.thinkingEnabled, customPrompt: input.customPrompt,
-      project: { school: context.project.school },
-      target: context.target,
-      sources,
-      resume: context.resume ? String(context.resume.content) : undefined,
-      faculty: context.faculty ? { kind: String(context.faculty.kind), name: String(context.faculty.name), homepage: context.faculty.homepage ? String(context.faculty.homepage) : null, description: context.faculty.description ? String(context.faculty.description) : null } : undefined,
-    }, apiKey)
-
-    const audits = await verifyGeneratedQuestionEvidence({ project: { school: context.project.school }, target: context.target, questions: result.questions, sources }, apiKey)
-    const auditMap = new Map(audits.map((audit) => [audit.questionIndex, audit]))
-    const timestamp = new Date().toISOString()
-    const versionId = `qsv_${nanoid(12)}`
-    sqlite.transaction(() => {
-      sqlite.prepare("INSERT INTO question_set_versions (id, project_id, target_id, module, title, source_snapshot, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .run(versionId, input.projectId, input.targetId, input.module, result.title, JSON.stringify(sources.map(({ id, title, url }) => ({ id, title, url }))), timestamp)
-      const insert = sqlite.prepare("INSERT INTO question_items (id, version_id, position, theme, question, summary, url, kind, tags, evidence_ids, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      result.questions.forEach((question, index) => {
-        const requestedKind = questionKinds.includes(question.kind) ? question.kind : "generated"
-        const requestedIndexes = (question.evidenceSourceIndexes || []).filter((value) => Number.isInteger(value) && value >= 0 && value < sources.length)
-        const audit = auditMap.get(index)
-        let finalKind: GeneratedQuestion["kind"] = requestedKind
-        let evidenceIndexes = requestedIndexes
-        if (historicalKinds.has(requestedKind)) {
-          const directlySupported = Boolean(audit?.supported && audit.supportedEvidenceSourceIndexes.length)
-          if (!directlySupported) finalKind = audit?.maxKind === "generated" ? "generated" : "recommended_practice"
-          else if (audit) finalKind = audit.maxKind
-          evidenceIndexes = audit?.supportedEvidenceSourceIndexes.length ? audit.supportedEvidenceSourceIndexes : requestedIndexes
-        } else if (audit?.supportedEvidenceSourceIndexes.length) evidenceIndexes = audit.supportedEvidenceSourceIndexes
-        const evidenceIds = evidenceIndexes.map((value) => sources[value]?.id).filter((value): value is string => Boolean(value))
-        if (!validateQuestionProvenance(finalKind, evidenceIds[0])) finalKind = "recommended_practice"
-        const citedUrl = evidenceIds.length ? sources.find((source) => source.id === evidenceIds[0])?.url || null : null
-        const knownQuestionUrl = question.url && sources.some((source) => source.url === question.url) ? question.url : null
-        const url = citedUrl || knownQuestionUrl
-        insert.run(
-          `qi_${nanoid(12)}`,
-          versionId,
-          index,
-          question.theme || "综合",
-          question.question,
-          question.summary || null,
-          url,
-          finalKind,
-          JSON.stringify(question.tags || []),
-          JSON.stringify(evidenceIds),
-          JSON.stringify({ evidenceAudit: audit ? { supported: audit.supported, reason: audit.reason, originalKind: requestedKind } : { supported: !historicalKinds.has(requestedKind), reason: "该题无需历史来源审计", originalKind: requestedKind } }),
-        )
-      })
-      sqlite.prepare("UPDATE prep_projects SET updated_at=? WHERE id=?").run(timestamp, input.projectId)
-    })()
-    return NextResponse.json({ versionId, title: result.title, count: result.questions.length, model: result.model, sourceCount: sources.length, evidenceAudited: true })
+    if (request.headers.get("accept")?.includes("application/x-ndjson")) return generationStream(execute, request.signal)
+    return NextResponse.json(await execute(AbortSignal.any([request.signal, AbortSignal.timeout(300_000)]), () => {}))
   } catch (error) {
     const message = error instanceof Error ? error.message : "生成失败"
     return NextResponse.json({ error: message }, { status: message === "SESSION_REQUIRED" ? 401 : message === "ACCESS_CODE_REQUIRED" ? 403 : 400 })

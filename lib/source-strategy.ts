@@ -297,7 +297,9 @@ export function selectSourcesForGeneration<T extends SourceCandidate & { assessm
   return sources.map((source) => {
     const rule = assessCandidateRules(source, target)
     const assessment = source.assessment
-    if (rule.hardReject || assessment?.verdict === "reject") return null
+    // User-provided material may omit the school name or use private shorthand.
+    // It must still reach semantic review instead of being discarded by URL/text rules.
+    if ((rule.hardReject && source.origin !== "user") || assessment?.verdict === "reject") return null
     if (assessment?.usableFor.length && !assessment.usableFor.includes(module) && source.origin !== "user") return null
     const modelPassages = (assessment?.relevantPassages || []).filter((passage) => source.content.includes(passage))
     const passages = [...new Set([...modelPassages, ...extractRelevantPassages(source.content, terms, 4)])].slice(0, 4)
@@ -307,6 +309,7 @@ export function selectSourcesForGeneration<T extends SourceCandidate & { assessm
     const moduleBoost = assessment?.usableFor.includes(module) ? 18 : 0
     const userBoost = source.origin === "user" ? 12 : 0
     const evidenceBoost = assessment ? Number(assessment.evidenceLevel.slice(1)) * 4 : 0
-    return { source, score: baseQuality + Math.min(termHits * 2, 22) + moduleBoost + userBoost + evidenceBoost, content: passages.join("\n\n--- 相关片段 ---\n\n").slice(0, 5200) }
+    const content = passages.join("\n\n--- 相关片段 ---\n\n").slice(0, 5200) || (source.origin === "user" ? source.content.slice(0, 5200) : "")
+    return { source, score: baseQuality + Math.min(termHits * 2, 22) + moduleBoost + userBoost + evidenceBoost, content }
   }).filter((item): item is NonNullable<typeof item> => Boolean(item && item.content)).sort((a, b) => b.score - a.score).slice(0, limit).map(({ source, content }) => ({ ...source, content }))
 }

@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import { collectGeneration } from "@/lib/generation-stream"
 import { collectResearch } from "@/lib/research-stream"
 import styles from "./interview-workspace.module.css"
 
@@ -126,13 +127,17 @@ export function InterviewWorkspace() {
 
   const generate = async () => {
     if (!projectId || !selectedTargetId) return toast.error("请先创建申请目标")
+    const toastId = `generate-${active}`
     setGenerating(true)
     try {
-      const result = await requestJson<{ versionId: string; count: number }>("/api/generate", { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ projectId, targetId: selectedTargetId, module: active, model, thinkingEnabled: thinking, customPrompt }) })
+      const result = await collectGeneration(
+        { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ projectId, targetId: selectedTargetId, module: active, model, thinkingEnabled: thinking, customPrompt }) },
+        (detail) => toast.loading(detail, { id: toastId }),
+      )
       setVersionChoice((current) => ({ ...current, [active]: result.versionId }))
       await load()
-      toast.success(`已生成 ${result.count} 道问题`)
-    } catch (error) { const message = error instanceof Error ? error.message : "生成失败"; toast.error(message); if (message.includes("Key") || message.includes("密钥")) setApiOpen(true) }
+      toast.success(`已生成 ${result.count} 道问题`, { id: toastId })
+    } catch (error) { const message = error instanceof Error ? error.message : "生成失败"; toast.error(message, { id: toastId }); if (message.includes("Key") || message.includes("密钥")) setApiOpen(true) }
     finally { setGenerating(false) }
   }
 

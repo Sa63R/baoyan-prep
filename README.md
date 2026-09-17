@@ -161,7 +161,7 @@ baoyan-prep/
 |---|---|
 | TypeScript | 通过 |
 | ESLint | 通过 |
-| Vitest | 8 个文件，46/46 通过 |
+| Vitest | 9 个文件，51/51 通过 |
 | Playwright 研究流程 | 4/4 通过 |
 | 生产构建 | 通过 |
 | Railway 健康检查 | `/api/health` 返回 `ok: true` |

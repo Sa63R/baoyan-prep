@@ -76,4 +76,18 @@ describe("target-aware source strategy", () => {
     expect(selected.map((source) => source.id)).toEqual(["good"])
     expect(selected[0].content).toContain("最短路")
   })
+
+  it("keeps user material available for semantic review even when it uses private shorthand", () => {
+    const uploaded = {
+      id: "user-note",
+      title: "学长面经",
+      url: null,
+      content: "老师先问了项目中的模型设计，然后追问训练数据和消融实验。",
+      status: "ready",
+      origin: "user" as const,
+    }
+    const selected = selectSourcesForGeneration([uploaded], target, "project")
+    expect(selected).toHaveLength(1)
+    expect(selected[0].content).toContain("消融实验")
+  })
 })
