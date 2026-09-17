@@ -192,7 +192,7 @@ function ProjectView({ openEvidence }: { openEvidence: (id: string) => void }) {
   )
 }
 
-function SourcesView() {
+function SourcesView({ demoMode, integrations }: { demoMode: boolean; integrations?: { llmConfigured: boolean; tavilyConfigured: boolean } }) {
   const [query, setQuery] = useState("虚构理工大学 计算机学院 2027 夏令营")
   const [url, setUrl] = useState("")
   const [title, setTitle] = useState("脱敏经验记录")
@@ -211,8 +211,8 @@ function SourcesView() {
   return (
     <>
       <ViewHeader icon={Search} eyebrow="资料与来源" title="先拿到原文，再提取证据" description="搜索摘要只用于发现线索；URL 导入会读取正文，失败与部分成功都会明确保留。" action={<Button nativeButton={false} render={<a href="/api/export" />} variant="outline"><Download />导出 Markdown</Button>} />
-      <div className="access-strip"><LockKeyhole /><div><strong>真实服务访问码</strong><p>仅保护额度入口，不是 LLM 或 Tavily 密钥；演示模式可留空。</p></div><Input type="password" value={accessCode} onChange={(event) => setAccessCode(event.target.value)} placeholder="APP_ACCESS_CODE" /><Button variant="outline" onClick={() => { sessionStorage.setItem("baoyan-access-code", accessCode); toast.success("访问码仅保存在当前标签页") }}>保存</Button></div>
-      <section className="search-box"><div><Search /><Input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="目标搜索词" /></div><Button disabled={busy === "search"} onClick={() => run("search", () => requestJson("/api/search", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query }) }))}>{busy === "search" ? <LoaderCircle className="spin" /> : <Sparkles />}自动调查</Button><p>预算上限：10 次搜索 / 20 个页面。演示模式仅返回虚构内部来源。</p></section>
+      <div className="access-strip"><LockKeyhole /><div><strong>真实服务访问码</strong><p>{demoMode ? "仅保护额度入口，不是 LLM 或 Tavily 密钥；演示模式可留空。" : `真实模式 · DeepSeek ${integrations?.llmConfigured ? "已接入" : "未配置"} · Tavily ${integrations?.tavilyConfigured ? "已接入" : "未配置"}`}</p></div><Input type="password" value={accessCode} onChange={(event) => setAccessCode(event.target.value)} placeholder="APP_ACCESS_CODE" /><Button variant="outline" onClick={() => { sessionStorage.setItem("baoyan-access-code", accessCode); toast.success("访问码仅保存在当前标签页") }}>保存</Button></div>
+      <section className="search-box"><div><Search /><Input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="目标搜索词" /></div><Button disabled={busy === "search" || (!demoMode && !integrations?.tavilyConfigured)} onClick={() => run("search", () => requestJson("/api/search", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query }) }))}>{busy === "search" ? <LoaderCircle className="spin" /> : <Sparkles />}自动调查</Button><p>{demoMode ? "预算上限：10 次搜索 / 20 个页面。演示模式仅返回虚构内部来源。" : integrations?.tavilyConfigured ? "真实搜索已启用；预算上限：10 次搜索 / 20 个页面。" : "真实模型反馈已启用；自动调查仍需配置 Tavily API Key。"}</p></section>
       <Tabs defaultValue="url" className="source-tabs">
         <TabsList><TabsTrigger value="url"><Link2 />公开 URL</TabsTrigger><TabsTrigger value="paste"><FilePlus2 />粘贴文字</TabsTrigger><TabsTrigger value="upload"><Upload />上传文件</TabsTrigger></TabsList>
         <TabsContent value="url"><section className="module-card import-card"><h2>读取公开网页</h2><p>仅允许 http/https；阻止本地、内网、元数据地址及重定向绕过。</p><Input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://学校官网/通知页面" /><Button disabled={!url || busy === "url"} onClick={() => run("url", () => requestJson("/api/import/url", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url }) }))}>{busy === "url" ? <LoaderCircle className="spin" /> : <ArrowRight />}读取并保存正文</Button></section></TabsContent>
@@ -226,10 +226,10 @@ function SourcesView() {
   )
 }
 
-export function TrainingView({ active, openEvidence }: { active: ActiveView; openEvidence: (id: string) => void }) {
+export function TrainingView({ active, openEvidence, demoMode, integrations }: { active: ActiveView; openEvidence: (id: string) => void; demoMode: boolean; integrations?: { llmConfigured: boolean; tavilyConfigured: boolean } }) {
   if (active === "overview") return <OverviewView />
   if (active === "coding") return <CodingView openEvidence={openEvidence} />
   if (active === "interview") return <InterviewView openEvidence={openEvidence} />
   if (active === "project") return <ProjectView openEvidence={openEvidence} />
-  return <SourcesView />
+  return <SourcesView demoMode={demoMode} integrations={integrations} />
 }

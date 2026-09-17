@@ -88,12 +88,13 @@ export function Workspace() {
   const [collapsed, setCollapsed] = useState(false)
   const [evidenceCollapsed, setEvidenceCollapsed] = useState(false)
   const [syncState, setSyncState] = useState<"loading" | "ready" | "failed">("loading")
+  const [runtime, setRuntime] = useState<{ demoMode: boolean; integrations: { llmConfigured: boolean; tavilyConfigured: boolean } } | null>(null)
   const selected = evidence[selectedId]
 
   useEffect(() => {
     fetch("/api/bootstrap", { cache: "no-store" })
       .then((response) => { if (!response.ok) throw new Error(); return response.json() })
-      .then(() => setSyncState("ready"))
+      .then((payload) => { setRuntime(payload); setSyncState("ready") })
       .catch(() => setSyncState("failed"))
   }, [])
 
@@ -112,7 +113,7 @@ export function Workspace() {
         </div>
         <div className="demo-card">
           <div className="demo-icon"><Sparkles /></div>
-          {!collapsed && <div><strong>演示工作区</strong><span>所有学校、导师与经历均为虚构</span></div>}
+          {!collapsed && <div><strong>{runtime?.demoMode === false ? "真实反馈已启用" : "演示工作区"}</strong><span>{runtime?.demoMode === false ? `DeepSeek ${runtime.integrations.llmConfigured ? "已接入" : "未配置"} · 搜索 ${runtime.integrations.tavilyConfigured ? "已接入" : "待配置"}` : "所有学校、导师与经历均为虚构"}</span></div>}
         </div>
         <nav aria-label="主导航">
           {nav.map(([id, label, Icon]) => (
@@ -126,7 +127,7 @@ export function Workspace() {
             {!collapsed && <><span>调查覆盖</span><strong>6 / 9 字段</strong></>}
             <Progress value={67} />
           </div>
-          {!collapsed && <p>{syncState === "loading" ? "正在恢复当前会话…" : syncState === "failed" ? "会话保存失败，请刷新重试。" : "记录已保存；真实服务未配置。"}</p>}
+          {!collapsed && <p>{syncState === "loading" ? "正在恢复当前会话…" : syncState === "failed" ? "会话保存失败，请刷新重试。" : runtime?.demoMode === false ? "记录已保存；模型反馈走真实 API。" : "记录已保存；真实服务未配置。"}</p>}
         </div>
       </aside>
 
@@ -198,7 +199,7 @@ export function Workspace() {
             </div>
           </article>
         </div>
-        </> : <TrainingView active={active} openEvidence={openEvidence} />}
+        </> : <TrainingView active={active} openEvidence={openEvidence} demoMode={runtime?.demoMode ?? true} integrations={runtime?.integrations} />}
       </section>
 
       <aside className="evidence-panel">
@@ -208,7 +209,7 @@ export function Workspace() {
 
       <Sheet open={mobileNav} onOpenChange={setMobileNav}>
         <SheetContent side="left" className="w-[min(86vw,320px)] bg-[#111a2d] text-white">
-          <SheetHeader><SheetTitle className="text-white">循证保研</SheetTitle><SheetDescription className="text-[#8d9ab5]">演示工作区 · 所有数据均为虚构</SheetDescription></SheetHeader>
+          <SheetHeader><SheetTitle className="text-white">循证保研</SheetTitle><SheetDescription className="text-[#8d9ab5]">{runtime?.demoMode === false ? "真实模型反馈已启用 · 当前档案仍为示例数据" : "演示工作区 · 所有数据均为虚构"}</SheetDescription></SheetHeader>
           <nav className="mobile-nav" aria-label="移动端主导航">
             {nav.map(([id, label, Icon]) => <button key={id} className={active === id ? "active" : ""} onClick={() => { setActive(id); setMobileNav(false) }}><Icon /><span>{label}</span></button>)}
           </nav>

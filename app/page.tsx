@@ -1,5 +1,5 @@
-import { Workspace } from "@/components/workspace"
+import { InterviewWorkspace } from "@/components/interview-workspace"
 
 export default function Home() {
-  return <Workspace />
+  return <InterviewWorkspace />
 }
