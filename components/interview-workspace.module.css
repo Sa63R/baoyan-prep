@@ -234,6 +234,11 @@
 .lastRun { display: flex; align-items: center; gap: 6px; margin: 0; color: #8490a2; font-size: 11px; }
 .lastRun svg { width: 13px; }
 .researchPanel > button, .addPanel > button { justify-self: start; }
+.depthChoices button:disabled { cursor: default; opacity: .65; }
+.researchActions { display: flex; gap: 10px; flex-wrap: wrap; }
+.researchProgress, .researchError { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+.researchProgress { color: #52677f; }
+.researchError { color: #c32939; }
 .addPanel textarea { min-height: 170px; resize: vertical; }
 .importTabs { display: grid; grid-template-columns: repeat(3,1fr); gap: 4px; padding: 4px; border-radius: 10px; background: #edf0f4; }
 .importTabs button { height: 34px; border: 0; border-radius: 7px; color: #7a8494; background: transparent; font: 12px/1 inherit; cursor: pointer; }

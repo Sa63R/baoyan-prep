@@ -5,6 +5,7 @@ import { hasModelApiKey, reviewSourceCandidatesWithModel } from "@/lib/adapters/
 import { extractTavily, searchTavily } from "@/lib/adapters/tavily"
 import { sqlite, workspaceForSession } from "@/lib/db"
 import { assertServiceAccess, requireSession } from "@/lib/session"
+import { researchStream, type ResearchResult } from "@/lib/research-stream"
 import {
   assessCandidateRules,
   buildResearchQueries,
@@ -18,7 +19,7 @@ import {
 import { insertSourceAsset, projectContext, upsertSourceAssessment } from "@/lib/workbench"
 
 export const runtime = "nodejs"
-export const maxDuration = 120
+export const maxDuration = 360
 
 const schema = z.object({
   projectId: z.string().min(1),
@@ -54,89 +55,121 @@ export async function POST(request: NextRequest) {
     sqlite.prepare("INSERT INTO research_runs (id, project_id, target_id, depth, status, query, source_count, detail, created_at, updated_at) VALUES (?, ?, ?, ?, 'running', ?, 0, ?, ?, ?)")
       .run(runId, input.projectId, input.targetId, input.depth, queries.join(" | "), "正在发现并审核公开资料", timestamp, timestamp)
 
-    const found = new Map<string, { title: string; url: string; content: string; score: number; raw_content?: string | null }>()
-    for (let index = 0; index < queries.length; index += 3) {
-      const results = await Promise.all(queries.slice(index, index + 3).map((query) => searchTavily(query, maxResults, tavilyKey, input.depth === "deep" ? "advanced" : "basic")))
-      for (const result of results) {
-        for (const item of result.results) {
-          const key = normalizeSourceUrl(item.url)
-          const existing = found.get(key)
-          if (!existing || item.score > existing.score || (item.raw_content?.length || 0) > (existing.raw_content?.length || 0)) found.set(key, { ...item, url: key })
+    const execute = async (signal: AbortSignal, progress: (detail: string) => void): Promise<ResearchResult> => {
+      let stage = "联网搜索"
+      const report = (detail: string) => {
+        signal.throwIfAborted()
+        sqlite.prepare("UPDATE research_runs SET detail=?, updated_at=? WHERE id=?").run(detail, new Date().toISOString(), runId)
+        progress(detail)
+      }
+      try {
+        const found = new Map<string, { title: string; url: string; content: string; score: number; raw_content?: string | null }>()
+        for (let index = 0; index < queries.length; index += 3) {
+          report(`正在搜索公开资料（${index}/${queries.length}）`)
+          const results = await Promise.all(queries.slice(index, index + 3).map((query) => searchTavily(query, maxResults, tavilyKey, input.depth === "deep" ? "advanced" : "basic", signal)))
+          for (const result of results) {
+            for (const item of result.results) {
+              const key = normalizeSourceUrl(item.url)
+              const existing = found.get(key)
+              if (!existing || item.score > existing.score || (item.raw_content?.length || 0) > (existing.raw_content?.length || 0)) found.set(key, { ...item, url: key })
+            }
+          }
         }
+        const items = [...found.values()]
+        stage = "正文提取"
+        report(`已找到 ${items.length} 条线索，正在读取正文`)
+        const extractLimit = input.depth === "quick" ? 10 : input.depth === "standard" ? 20 : 40
+        const needExtract = items.filter((item) => !item.raw_content && item.url.startsWith("http")).slice(0, extractLimit)
+        const extracted = new Map<string, string>()
+        for (let index = 0; index < needExtract.length; index += 20) {
+          const batch = needExtract.slice(index, index + 20)
+          const result = await extractTavily(batch.map((item) => item.url), tavilyKey, signal).catch(() => {
+            signal.throwIfAborted()
+            return { results: [], failed_results: [], request_id: "" }
+          })
+          for (const item of result.results) extracted.set(normalizeSourceUrl(item.url), item.raw_content)
+        }
+
+        const candidates = items.flatMap((item): SourceCandidate[] => {
+          const content = (item.raw_content || extracted.get(item.url) || item.content || "").trim()
+          if (content.length < 20) return []
+          return [{
+            title: item.title || new URL(item.url).hostname,
+            url: item.url,
+            content: content.slice(0, 500_000),
+            status: item.raw_content || extracted.has(item.url) ? "ready" : "snippet",
+            origin: "automatic",
+            tavilyScore: item.score,
+          }]
+        })
+        const rules = candidates.map((candidate) => assessCandidateRules(candidate, target))
+        const reviewable = candidates.map((candidate, index) => ({ candidate, rule: rules[index], index })).filter((item) => !item.rule.hardReject)
+          .sort((a, b) => b.rule.preliminaryScore - a.rule.preliminaryScore)
+
+        let modelReviews = new Map<number, Awaited<ReturnType<typeof reviewSourceCandidatesWithModel>>[number]>()
+        const modelScreening = hasModelApiKey(deepseekKey)
+        if (modelScreening && reviewable.length) {
+          stage = "DeepSeek 资料审核"
+          report(`正在审核资料（0/${reviewable.length}）`)
+          const reviews = await reviewSourceCandidatesWithModel({
+            project: { school: schoolIdentity(context.project.school).canonical },
+            target: context.target,
+            candidates: reviewable.map(({ candidate, rule, index }) => ({ index, title: candidate.title, url: candidate.url, status: candidate.status, ruleSummary: rule.reason, content: prepareCandidatePreview(candidate, target) })),
+          }, deepseekKey, { signal, onProgress: (reviewed, total) => report(`正在审核资料（${reviewed}/${total}）`) })
+          modelReviews = new Map(reviews.map((review) => [review.index, review]))
+          if (modelReviews.size !== reviewable.length) throw new Error("DeepSeek 审核条目不完整，请重试收集")
+        }
+
+        stage = "保存资料"
+        report("审核完成，正在保存资料")
+        let added = 0
+        let duplicates = 0
+        let rejected = 0
+        let referenced = 0
+        sqlite.transaction(() => {
+          for (let index = 0; index < candidates.length; index += 1) {
+            const candidate = candidates[index]
+            const assessment = finalizeSourceAssessment(candidate, rules[index], modelReviews.get(index))
+            if (assessment.verdict === "reject") { rejected += 1; continue }
+            if (assessment.verdict === "reference") referenced += 1
+            const confidence = assessment.qualityScore >= 78 && assessment.targetMatch >= 78 ? "high" : assessment.qualityScore >= 55 ? "medium" : "low"
+            const saved = insertSourceAsset({
+              workspaceId: workspace.id,
+              projectId: input.projectId,
+              origin: "automatic",
+              title: candidate.title,
+              url: candidate.url,
+              mimeType: "text/html",
+              content: candidate.content,
+              status: candidate.status,
+              confidence,
+              sourceType: typeLabels[assessment.contentType] || "公开网络资料",
+              targetIds: [input.targetId],
+            })
+            upsertSourceAssessment(saved.source.id, input.targetId, assessment)
+            if (saved.duplicate) duplicates += 1
+            else added += 1
+          }
+        })()
+        const ruleRejected = rules.filter((rule) => rule.hardReject).length
+        const screeningLabel = modelScreening ? `DeepSeek 二次审核 ${modelReviews.size}/${reviewable.length} 条` : "未配置 DeepSeek，已使用严格规则审核"
+        const detail = `发现 ${items.length} 条；排除 ${rejected} 条（规则 ${ruleRejected}）；保留参考 ${referenced} 条；新增 ${added} 条；合并重复 ${duplicates} 条；${screeningLabel}`
+        sqlite.prepare("UPDATE research_runs SET status='ready', source_count=?, detail=?, updated_at=? WHERE id=?")
+          .run(added, detail, new Date().toISOString(), runId)
+        sqlite.prepare("UPDATE prep_projects SET updated_at=? WHERE id=?").run(new Date().toISOString(), input.projectId)
+        return { runId, status: "ready", added, duplicates, rejected, discovered: items.length, modelScreening }
+      } catch (error) {
+        const aborted = signal.aborted && signal.reason?.name !== "TimeoutError"
+        const message = aborted ? "收集已取消" : error instanceof Error && error.name === "TimeoutError"
+          ? `${stage}耗时过长，请重试收集`
+          : error instanceof Error ? error.message : "收集失败，请重试"
+        sqlite.prepare("UPDATE research_runs SET status=?, detail=?, updated_at=? WHERE id=?")
+          .run(aborted ? "cancelled" : "failed", message, new Date().toISOString(), runId)
+        throw new Error(message)
       }
     }
-    const items = [...found.values()]
-    const extractLimit = input.depth === "quick" ? 10 : input.depth === "standard" ? 20 : 40
-    const needExtract = items.filter((item) => !item.raw_content && item.url.startsWith("http")).slice(0, extractLimit)
-    const extracted = new Map<string, string>()
-    for (let index = 0; index < needExtract.length; index += 20) {
-      const batch = needExtract.slice(index, index + 20)
-      const result = await extractTavily(batch.map((item) => item.url), tavilyKey).catch(() => ({ results: [], failed_results: [], request_id: "" }))
-      for (const item of result.results) extracted.set(normalizeSourceUrl(item.url), item.raw_content)
-    }
-
-    const candidates = items.flatMap((item): SourceCandidate[] => {
-      const content = (item.raw_content || extracted.get(item.url) || item.content || "").trim()
-      if (content.length < 20) return []
-      return [{
-        title: item.title || new URL(item.url).hostname,
-        url: item.url,
-        content: content.slice(0, 500_000),
-        status: item.raw_content || extracted.has(item.url) ? "ready" : "snippet",
-        origin: "automatic",
-        tavilyScore: item.score,
-      }]
-    })
-    const rules = candidates.map((candidate) => assessCandidateRules(candidate, target))
-    const reviewable = candidates.map((candidate, index) => ({ candidate, rule: rules[index], index })).filter((item) => !item.rule.hardReject)
-      .sort((a, b) => b.rule.preliminaryScore - a.rule.preliminaryScore)
-
-    let modelReviews = new Map<number, Awaited<ReturnType<typeof reviewSourceCandidatesWithModel>>[number]>()
-    const modelScreening = hasModelApiKey(deepseekKey)
-    if (modelScreening && reviewable.length) {
-      const reviews = await reviewSourceCandidatesWithModel({
-        project: { school: schoolIdentity(context.project.school).canonical },
-        target: context.target,
-        candidates: reviewable.map(({ candidate, rule, index }) => ({ index, title: candidate.title, url: candidate.url, status: candidate.status, ruleSummary: rule.reason, content: prepareCandidatePreview(candidate, target) })),
-      }, deepseekKey)
-      modelReviews = new Map(reviews.map((review) => [review.index, review]))
-      if (modelReviews.size !== reviewable.length) throw new Error(`DeepSeek 资料审核格式不完整：应返回 ${reviewable.length} 条，实际解析到 ${modelReviews.size} 条`)
-    }
-
-    let added = 0
-    let duplicates = 0
-    let rejected = 0
-    let referenced = 0
-    for (let index = 0; index < candidates.length; index += 1) {
-      const candidate = candidates[index]
-      const assessment = finalizeSourceAssessment(candidate, rules[index], modelReviews.get(index))
-      if (assessment.verdict === "reject") { rejected += 1; continue }
-      if (assessment.verdict === "reference") referenced += 1
-      const confidence = assessment.qualityScore >= 78 && assessment.targetMatch >= 78 ? "high" : assessment.qualityScore >= 55 ? "medium" : "low"
-      const saved = insertSourceAsset({
-        workspaceId: workspace.id,
-        projectId: input.projectId,
-        origin: "automatic",
-        title: candidate.title,
-        url: candidate.url,
-        mimeType: "text/html",
-        content: candidate.content,
-        status: candidate.status,
-        confidence,
-        sourceType: typeLabels[assessment.contentType] || "公开网络资料",
-        targetIds: [input.targetId],
-      })
-      upsertSourceAssessment(saved.source.id, input.targetId, assessment)
-      if (saved.duplicate) duplicates += 1
-      else added += 1
-    }
-    const ruleRejected = rules.filter((rule) => rule.hardReject).length
-    const screeningLabel = modelScreening ? `DeepSeek 二次审核 ${modelReviews.size}/${reviewable.length} 条` : "未配置 DeepSeek，已使用严格规则审核"
-    const detail = `发现 ${items.length} 条；排除 ${rejected} 条（规则 ${ruleRejected}）；保留参考 ${referenced} 条；新增 ${added} 条；合并重复 ${duplicates} 条；${screeningLabel}`
-    sqlite.prepare("UPDATE research_runs SET status='ready', source_count=?, detail=?, updated_at=? WHERE id=?")
-      .run(added, detail, new Date().toISOString(), runId)
-    sqlite.prepare("UPDATE prep_projects SET updated_at=? WHERE id=?").run(new Date().toISOString(), input.projectId)
-    return NextResponse.json({ runId, status: "ready", added, duplicates, rejected, discovered: items.length, modelScreening })
+    if (request.headers.get("accept")?.includes("application/x-ndjson")) return researchStream(execute, request.signal)
+    return NextResponse.json(await execute(AbortSignal.any([request.signal, AbortSignal.timeout(360_000)]), () => {}))
   } catch (error) {
     const message = error instanceof Error ? error.message : "研究失败"
     if (runId) sqlite.prepare("UPDATE research_runs SET status='failed', detail=?, updated_at=? WHERE id=?").run(message, new Date().toISOString(), runId)

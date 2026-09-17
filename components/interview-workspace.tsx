@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import { collectResearch } from "@/lib/research-stream"
 import styles from "./interview-workspace.module.css"
 
 type Module = "coding" | "interview" | "project"
@@ -79,7 +80,6 @@ export function InterviewWorkspace() {
   const [model, setModel] = useState<"deepseek-flash" | "deepseek-v4-pro">("deepseek-flash")
   const [thinking, setThinking] = useState(true)
   const [generating, setGenerating] = useState(false)
-  const [researching, setResearching] = useState(false)
   const [versionChoice, setVersionChoice] = useState<Partial<Record<Module, string>>>({})
   const [evidenceIds, setEvidenceIds] = useState<string[] | null>(null)
   const [projectDialog, setProjectDialog] = useState<"new-project" | "new-target" | "edit-target" | null>(null)
@@ -92,7 +92,7 @@ export function InterviewWorkspace() {
   const [customPrompt, setCustomPrompt] = useState("")
 
   const load = async () => {
-    const snapshot = await requestJson<Snapshot>("/api/workbench", { cache: "no-store" })
+    const snapshot = await requestJson<Snapshot>("/api/workbench", { cache: "no-store", signal: AbortSignal.timeout(15_000) })
     setData(snapshot)
     setProjectId((current) => snapshot.projects.some((item) => item.id === current) ? current : snapshot.projects[0]?.id || "")
   }
@@ -241,8 +241,8 @@ export function InterviewWorkspace() {
       </main>
 
       <nav className={styles.mobileNav}>{navItems.map((item) => { const Icon = moduleMeta[item].icon; return <button key={item} className={active === item ? styles.activeNav : ""} onClick={() => setActive(item)}><Icon /><span>{moduleMeta[item].label}</span></button> })}</nav>
-      <ProjectDialog key={`${projectDialog || "closed"}-${currentTarget?.id || "none"}`} mode={projectDialog} open={Boolean(projectDialog)} onOpenChange={(open) => !open && setProjectDialog(null)} project={currentProject} target={currentTarget} onSaved={async (ids) => { await load(); if (ids?.projectId) setProjectId(ids.projectId); if (ids?.targetId) setTargetId(ids.targetId); setProjectDialog(null); if (ids?.projectId && ids?.targetId) { setResearching(true); requestJson("/api/research", { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ projectId: ids.projectId, targetId: ids.targetId, depth: "standard" }) }).then(async () => { await load(); toast.success("新项目的首次资料研究已完成") }).catch((error) => toast.error(`项目已创建，首次研究未完成：${error instanceof Error ? error.message : "请稍后重试"}`)).finally(() => setResearching(false)) } }} onNewTarget={() => setProjectDialog("new-target")} />
-      <MaterialsDialog open={materialsOpen} onOpenChange={setMaterialsOpen} project={currentProject} target={currentTarget} sources={projectSources} latestRun={data.runs.find((item) => item.projectId === projectId) || null} researching={researching} setResearching={setResearching} onReload={load} onEvidence={(ids) => { setMaterialsOpen(false); setEvidenceIds(ids) }} />
+      <ProjectDialog key={`${projectDialog || "closed"}-${currentTarget?.id || "none"}`} mode={projectDialog} open={Boolean(projectDialog)} onOpenChange={(open) => !open && setProjectDialog(null)} project={currentProject} target={currentTarget} onSaved={async (ids) => { await load(); if (ids?.projectId) setProjectId(ids.projectId); if (ids?.targetId) setTargetId(ids.targetId); setProjectDialog(null) }} onNewTarget={() => setProjectDialog("new-target")} />
+      <MaterialsDialog key={`${projectId}-${selectedTargetId}`} open={materialsOpen} onOpenChange={setMaterialsOpen} project={currentProject} target={currentTarget} sources={projectSources} latestRun={data.runs.find((item) => item.projectId === projectId && item.targetId === selectedTargetId) || null} onReload={load} onEvidence={(ids) => { setMaterialsOpen(false); setEvidenceIds(ids) }} />
 
       <Dialog open={apiOpen} onOpenChange={setApiOpen}><DialogContent className={styles.dialog}><DialogHeader><DialogTitle>API Key</DialogTitle><DialogDescription>密钥只保存在当前浏览器，随请求发往本机服务，不进入数据库、日志或导出文件。</DialogDescription></DialogHeader><label className={styles.field}>DeepSeek Key<Input type="password" value={deepseekKey} onChange={(event) => setDeepseekKey(event.target.value)} placeholder={runtime?.integrations.llmConfigured ? "服务端已有配置；可留空" : "sk-..."} /></label><label className={styles.field}>Tavily Key<Input type="password" value={tavilyKey} onChange={(event) => setTavilyKey(event.target.value)} placeholder={runtime?.integrations.tavilyConfigured ? "服务端已有配置；可留空" : "tvly-..."} /></label><div className={styles.keyStatus}><span data-ready={Boolean(deepseekKey || runtime?.integrations.llmConfigured)}><i />DeepSeek</span><span data-ready={Boolean(tavilyKey || runtime?.integrations.tavilyConfigured)}><i />Tavily</span></div><DialogFooter><Button variant="outline" onClick={() => { setDeepseekKey(""); setTavilyKey(""); localStorage.removeItem("baoyan-deepseek-key"); localStorage.removeItem("baoyan-tavily-key"); toast.success("浏览器密钥已清除") }}>清除</Button><Button onClick={saveKeys}>保存到浏览器</Button></DialogFooter></DialogContent></Dialog>
       <Dialog open={promptOpen} onOpenChange={setPromptOpen}><DialogContent className={styles.dialog}><DialogHeader><DialogTitle>补充生成要求</DialogTitle><DialogDescription>三关共用。它只影响以后生成的新版本，不会改写已保存题单。</DialogDescription></DialogHeader><Textarea className={styles.promptArea} value={customPrompt} onChange={(event) => setCustomPrompt(event.target.value)} placeholder="例如：更关注系统方向；不要加入纯数学竞赛题……" /><DialogFooter><Button variant="outline" onClick={() => { setCustomPrompt(""); localStorage.removeItem("baoyan-workbench-prompt") }}>恢复默认</Button><Button onClick={() => { localStorage.setItem("baoyan-workbench-prompt", customPrompt); setPromptOpen(false); toast.success("补充要求已保存") }}>保存</Button></DialogFooter></DialogContent></Dialog>
@@ -313,7 +313,7 @@ function ProjectDialog({ mode, open, onOpenChange, project, target, onSaved, onN
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className={`${styles.dialog} ${styles.projectDialog}`}><DialogHeader><DialogTitle>{mode === "new-project" ? "新建备考项目" : mode === "new-target" ? `为 ${project?.school || "当前学校"} 新增目标` : "编辑申请目标"}</DialogTitle><DialogDescription>填写实际申请信息；学校特有内容可以放入自定义字段。</DialogDescription></DialogHeader><div className={styles.formGrid}><label className={styles.field}>学校<Input value={school} disabled={mode !== "new-project"} onChange={(event) => setSchool(event.target.value)} /></label><label className={styles.field}>院系<Input value={department} onChange={(event) => setDepartment(event.target.value)} /></label><label className={styles.field}>项目 / 专业<Input value={program} onChange={(event) => setProgram(event.target.value)} /></label><label className={styles.field}>研究方向<Input value={direction} onChange={(event) => setDirection(event.target.value)} /></label><label className={styles.field}>申请年份<Input type="number" value={year} onChange={(event) => setYear(event.target.value ? Number(event.target.value) : "")} /></label><label className={styles.field}>批次<select value={batch} onChange={(event) => setBatch(event.target.value as typeof batch)}><option value="" disabled></option><option>夏令营</option><option>预推免</option></select></label><label className={styles.field}>导师<Input value={mentor} onChange={(event) => setMentor(event.target.value)} /></label><label className={`${styles.field} ${styles.fullField}`}>自定义字段<Textarea value={customText} onChange={(event) => setCustomText(event.target.value)} /></label></div><DialogFooter>{mode === "edit-target" && <Button variant="outline" onClick={onNewTarget}><Plus />新增申请目标</Button>}<Button onClick={save} disabled={busy}>{busy && <LoaderCircle className={styles.spin} />}保存</Button></DialogFooter></DialogContent></Dialog>
 }
 
-function MaterialsDialog({ open, onOpenChange, project, target, sources, latestRun, researching, setResearching, onReload, onEvidence }: { open: boolean; onOpenChange: (value: boolean) => void; project: Project | null; target: Target | null; sources: Source[]; latestRun: ResearchRun | null; researching: boolean; setResearching: (value: boolean) => void; onReload: () => Promise<void>; onEvidence: (ids: string[]) => void }) {
+function MaterialsDialog({ open, onOpenChange, project, target, sources, latestRun, onReload, onEvidence }: { open: boolean; onOpenChange: (value: boolean) => void; project: Project | null; target: Target | null; sources: Source[]; latestRun: ResearchRun | null; onReload: () => Promise<void>; onEvidence: (ids: string[]) => void }) {
   const [view, setView] = useState<"list" | "research" | "add">("list")
   const [tab, setTab] = useState<"all" | "automatic" | "user">("all")
   const [depth, setDepth] = useState("standard")
@@ -323,15 +323,50 @@ function MaterialsDialog({ open, onOpenChange, project, target, sources, latestR
   const [text, setText] = useState("")
   const [file, setFile] = useState<File | null>(null)
   const [busy, setBusy] = useState(false)
+  const [researching, setResearching] = useState(false)
+  const [researchProgress, setResearchProgress] = useState("")
+  const [researchError, setResearchError] = useState("")
+  const researchController = useRef<AbortController | null>(null)
+  useEffect(() => () => researchController.current?.abort(), [])
   const visible = sources.filter((item) => tab === "all" || item.origin === tab)
-  const research = async () => { if (!project || !target) return; setResearching(true); try { const result = await requestJson<{ added: number; duplicates: number }>("/api/research", { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ projectId: project.id, targetId: target.id, depth }) }); await onReload(); setView("list"); toast.success(`新增 ${result.added} 条资料，合并 ${result.duplicates} 条重复`) } catch (error) { toast.error(error instanceof Error ? error.message : "研究失败") } finally { setResearching(false) } }
+  const research = async () => {
+    if (!project || !target || researchController.current) return
+    const controller = new AbortController()
+    researchController.current = controller
+    setResearching(true)
+    setResearchError("")
+    setResearchProgress("正在连接…")
+    try {
+      const result = await collectResearch({ method: "POST", headers: jsonHeaders(), signal: controller.signal, body: JSON.stringify({ projectId: project.id, targetId: target.id, depth }) }, setResearchProgress)
+      await onReload()
+      setView("list")
+      toast.success(`新增 ${result.added} 条资料，合并 ${result.duplicates} 条重复`)
+    } catch (error) {
+      if (controller.signal.aborted) toast.info("已取消收集")
+      else {
+        const message = error instanceof Error && error.name === "TimeoutError" ? "收集耗时过长，请重试" : error instanceof Error ? error.message : "收集失败，请重试"
+        setResearchError(message)
+        toast.error(message)
+      }
+    } finally {
+      researchController.current = null
+      setResearching(false)
+      setResearchProgress("")
+    }
+  }
   const importSource = async () => { if (!project || !target) return; setBusy(true); try { if (importMode === "file") { if (!file) throw new Error("请选择文件"); const form = new FormData(); form.set("file", file); form.set("projectId", project.id); form.set("targetId", target.id); const headers = jsonHeaders(); delete headers["content-type"]; await requestJson("/api/materials/import", { method: "POST", headers, body: form }) } else await requestJson("/api/materials/import", { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ projectId: project.id, targetId: target.id, mode: importMode, title, url, text }) }); setUrl(""); setTitle(""); setText(""); setFile(null); await onReload(); setView("list"); toast.success("资料已添加") } catch (error) { toast.error(error instanceof Error ? error.message : "导入失败") } finally { setBusy(false) } }
   const clearSources = async () => { if (!project || !sources.length || !window.confirm(`将删除“${project.name}”中的全部 ${sources.length} 条资料，包括联网资料和你添加的资料。已有题单不会删除，但其中的来源将无法查看。是否继续？`)) return; setBusy(true); try { await requestJson(`/api/workbench?type=sources&projectId=${encodeURIComponent(project.id)}`, { method: "DELETE", headers: jsonHeaders() }); await onReload(); toast.success("当前项目的资料已全部删除") } catch (error) { toast.error(error instanceof Error ? error.message : "删除失败") } finally { setBusy(false) } }
   const titleText = view === "list" ? `${project?.name || "项目"} · 项目资料` : view === "research" ? "联网收集资料" : "添加资料"
   const description = view === "list" ? "这里的内容会作为三关题单的共同依据。" : view === "research" ? "系统会查找当前申请目标的公开招生信息、机试与面试经验。" : "添加链接、粘贴文字，或上传本地文件。"
-  return <Dialog open={open} onOpenChange={(value) => { if (!value) setView("list"); onOpenChange(value) }}><DialogContent className={`${styles.dialog} ${styles.materialDialog}`}><DialogHeader><div className={styles.materialHeading}>{view !== "list" && <button className={styles.backButton} onClick={() => setView("list")} aria-label="返回资料列表"><ArrowLeft /></button>}<div><DialogTitle>{titleText}</DialogTitle><DialogDescription>{description}</DialogDescription></div></div></DialogHeader>
+  return <Dialog open={open} onOpenChange={(value) => { if (!value) { researchController.current?.abort(); setView("list") }; onOpenChange(value) }}><DialogContent className={`${styles.dialog} ${styles.materialDialog}`}><DialogHeader><div className={styles.materialHeading}>{view !== "list" && <button type="button" className={styles.backButton} onClick={() => { researchController.current?.abort(); setView("list") }} aria-label="返回资料列表"><ArrowLeft /></button>}<div><DialogTitle>{titleText}</DialogTitle><DialogDescription>{description}</DialogDescription></div></div></DialogHeader>
     {view === "list" && <>{sources.length > 0 ? <><div className={styles.materialToolbar}><div><Button variant="outline" onClick={() => setView("research")}><Search />联网收集</Button><Button onClick={() => setView("add")}><Plus />添加资料</Button></div><div className={styles.materialActions}><a href={project ? `/api/materials/export?projectId=${encodeURIComponent(project.id)}` : "#"}><Archive />导出全部</a><button onClick={clearSources} disabled={busy}>{busy ? <LoaderCircle className={styles.spin} /> : <Trash2 />}清空资料</button></div></div><div className={styles.materialTabs}><div>{(["all", "automatic", "user"] as const).map((item) => <button key={item} className={tab === item ? styles.activeTab : ""} onClick={() => setTab(item)}>{item === "all" ? "全部" : item === "automatic" ? "联网资料" : "我的资料"}<span>{sources.filter((source) => item === "all" || source.origin === item).length}</span></button>)}</div></div><div className={styles.sourceList}>{visible.length ? visible.map((source) => <article key={source.id}><span className={source.origin === "automatic" ? styles.autoSource : styles.userSource}>{source.origin === "automatic" ? <Search /> : <Upload />}</span><button className={styles.sourceMain} onClick={() => onEvidence([source.id])}><strong>{source.title}</strong><small>{source.origin === "automatic" ? "联网资料" : "你添加的资料"} · {source.status === "snippet" ? "搜索摘要" : "已读取"}</small></button><div>{source.url && <a href={source.url} target="_blank" rel="noreferrer" title="打开原链接"><ExternalLink /></a>}<a href={`/api/materials/download?id=${encodeURIComponent(source.id)}`} title="下载"><Download /></a><button title="删除" onClick={async () => { if (!window.confirm(`删除“${source.title}”？`)) return; await requestJson(`/api/workbench?type=source&id=${encodeURIComponent(source.id)}`, { method: "DELETE", headers: jsonHeaders() }); await onReload() }}><Trash2 /></button></div></article>) : <div className={styles.noSource}>这里还没有资料</div>}</div></> : <div className={styles.materialEmpty}><span><FolderOpen /></span><h3>还没有项目资料</h3><p>让系统联网收集公开信息，或者添加你手上的通知、面经和文件。</p><div><Button variant="outline" onClick={() => setView("research")}><Search />联网收集</Button><Button onClick={() => setView("add")}><Plus />添加资料</Button></div></div>}</>}
-    {view === "research" && <section className={styles.researchPanel}><div className={styles.depthChoices}>{([{ value: "quick", label: "快速", note: "先找到最关键的官方信息" }, { value: "standard", label: "标准", note: "兼顾官方信息与经验资料" }, { value: "deep", label: "深度", note: "扩大检索范围，耗时更久" }] as const).map((item) => <button key={item.value} className={depth === item.value ? styles.activeDepth : ""} onClick={() => setDepth(item.value)}><span>{item.label}</span><small>{item.note}</small></button>)}</div>{latestRun && <p className={styles.lastRun}><RefreshCw />上次收集：{new Date(latestRun.updatedAt).toLocaleString("zh-CN")} · {latestRun.sourceCount} 条资料</p>}<Button size="lg" onClick={research} disabled={researching}>{researching ? <LoaderCircle className={styles.spin} /> : <Search />}{researching ? "正在收集…" : "开始联网收集"}</Button></section>}
+    {view === "research" && <section className={styles.researchPanel}>
+      <div className={styles.depthChoices}>{([{ value: "quick", label: "快速", note: "先找到最关键的官方信息" }, { value: "standard", label: "标准", note: "兼顾官方信息与经验资料" }, { value: "deep", label: "深度", note: "扩大检索范围，耗时更久" }] as const).map((item) => <button type="button" key={item.value} aria-pressed={depth === item.value} disabled={researching} className={depth === item.value ? styles.activeDepth : ""} onClick={() => setDepth(item.value)}><span>{item.label}</span><small>{item.note}</small></button>)}</div>
+      {researching && <p role="status" className={styles.researchProgress}>{researchProgress}</p>}
+      {researchError && <p role="alert" className={styles.researchError}>{researchError}</p>}
+      {!researching && latestRun && <p className={styles.lastRun}><RefreshCw />上次收集：{new Date(latestRun.updatedAt).toLocaleString("zh-CN")} · {latestRun.status === "ready" ? `${latestRun.sourceCount} 条资料` : latestRun.status === "cancelled" ? "已取消" : "未完成"}</p>}
+      <div className={styles.researchActions}><Button type="button" size="lg" onClick={research} disabled={researching}>{researching ? <LoaderCircle className={styles.spin} /> : <Search />}{researching ? "正在收集…" : researchError ? "重试收集" : "开始联网收集"}</Button>{researching && <Button type="button" variant="outline" onClick={() => researchController.current?.abort()}>取消收集</Button>}</div>
+    </section>}
     {view === "add" && <section className={styles.addPanel}><div className={styles.importTabs}>{(["url", "text", "file"] as const).map((item) => <button key={item} className={importMode === item ? styles.activeImport : ""} onClick={() => setImportMode(item)}>{item === "url" ? "链接" : item === "text" ? "粘贴文字" : "上传文件"}</button>)}</div>{importMode === "url" && <><Input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="粘贴公开网页链接" /><Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="资料名称（可选）" /></>}{importMode === "text" && <><Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="资料名称" /><Textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="粘贴通知、面经或个人笔记" /></>}{importMode === "file" && <label className={styles.fileDrop} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); setFile(event.dataTransfer.files[0] || null) }}><Upload /><strong>{file?.name || "拖入文件，或点击选择"}</strong><span>PDF、文本或图片，最大 10 MB</span><input type="file" accept=".pdf,.txt,.md,.png,.jpg,.jpeg,.webp" onChange={(event) => setFile(event.target.files?.[0] || null)} /></label>}<Button size="lg" onClick={importSource} disabled={busy}>{busy ? <LoaderCircle className={styles.spin} /> : <Plus />}{busy ? "正在添加…" : "添加到当前项目"}</Button></section>}
   </DialogContent></Dialog>
 }
