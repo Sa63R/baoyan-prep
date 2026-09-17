@@ -39,7 +39,9 @@ export async function POST(request: NextRequest) {
       if (file.size > 10_000_000) throw new Error("简历超过 10 MB")
       if (file.type !== "application/pdf" && !/\.pdf$/i.test(file.name)) throw new Error("简历文件仅支持 PDF，也可以改用文本粘贴")
       const bytes = new Uint8Array(await file.arrayBuffer())
-      const extracted = await extractText(bytes, { mergePages: true })
+      // unpdf transfers (and detaches) the supplied ArrayBuffer. Parse a copy so
+      // the original bytes remain available when the PDF is persisted below.
+      const extracted = await extractText(new Uint8Array(bytes), { mergePages: true })
       content = extracted.text.trim()
       if (content.length < 40) throw new Error("该 PDF 无法提取可靠文字，请改用文本粘贴")
       const uploadRoot = resolve(/* turbopackIgnore: true */ process.env.UPLOAD_DIR || "./data/uploads")

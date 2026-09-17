@@ -45,7 +45,9 @@ export async function POST(request: NextRequest) {
       let text = ""
       let status = "ready"
       if (isPdf) {
-        const extracted = await extractText(bytes, { mergePages: true })
+        // Keep the upload buffer intact: unpdf transfers its input buffer while
+        // parsing, and the original file still needs to be written afterwards.
+        const extracted = await extractText(new Uint8Array(bytes), { mergePages: true })
         text = extracted.text.trim()
         if (text.length < 40) { status = "needs_text"; text = "扫描型 PDF 暂未提取到可靠文字，请同时上传截图或粘贴正文。" }
       } else if (isImage) {
