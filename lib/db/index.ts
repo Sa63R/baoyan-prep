@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS training_records (id TEXT PRIMARY KEY, workspace_id T
 CREATE INDEX IF NOT EXISTS records_workspace_idx ON training_records(workspace_id);
 CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, filename TEXT NOT NULL, mime_type TEXT NOT NULL, size INTEGER NOT NULL, storage_path TEXT NOT NULL, extracted_text TEXT NOT NULL, parse_status TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS attachments_workspace_idx ON attachments(workspace_id);
-CREATE TABLE IF NOT EXISTS prep_projects (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, name TEXT NOT NULL, school TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS prep_projects (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, name TEXT NOT NULL, school TEXT NOT NULL, pinned_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS prep_projects_workspace_idx ON prep_projects(workspace_id);
 CREATE TABLE IF NOT EXISTS application_targets (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES prep_projects(id) ON DELETE CASCADE, department TEXT NOT NULL, program TEXT NOT NULL, direction TEXT, application_year INTEGER NOT NULL, batch TEXT NOT NULL, mentor TEXT, custom_fields TEXT NOT NULL DEFAULT '{}', is_active INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS application_targets_project_idx ON application_targets(project_id);
@@ -49,6 +49,13 @@ CREATE TABLE IF NOT EXISTS resume_assets (id TEXT PRIMARY KEY, workspace_id TEXT
 CREATE TABLE IF NOT EXISTS faculty_subjects (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES prep_projects(id) ON DELETE CASCADE, target_id TEXT NOT NULL REFERENCES application_targets(id) ON DELETE CASCADE, kind TEXT NOT NULL, name TEXT NOT NULL, homepage TEXT, description TEXT, source_ids TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS faculty_subjects_target_idx ON faculty_subjects(target_id);
 `)
+const prepProjectColumns = sqlite.pragma("table_info(prep_projects)") as { name: string }[]
+if (!prepProjectColumns.some((column) => column.name === "pinned_at")) {
+  try { sqlite.exec("ALTER TABLE prep_projects ADD COLUMN pinned_at TEXT") }
+  catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("duplicate column name")) throw error
+  }
+}
 sqlite.prepare("UPDATE research_tasks SET status = 'interrupted', updated_at = ? WHERE status IN ('plan','discover','fetch','extract','verify','synthesize')").run(new Date().toISOString())
 
 export const db = drizzle(sqlite, { schema })

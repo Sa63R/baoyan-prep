@@ -31,14 +31,23 @@
 .moduleSection { margin-top: 24px; padding-top: 20px; border-top: 1px solid #dfe7e2; }
 .projectSection > p, .moduleSection > p { margin: 0 10px 9px; color: #8a958f; font-size: 11px; font-weight: 700; letter-spacing: .08em; }
 .projectList { display: grid; gap: 4px; max-height: 38vh; overflow: auto; }
-.projectList button { height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 10px; overflow: hidden; border: 0; border-radius: 10px; color: #4d5a55; background: transparent; font: 550 13px/1 inherit; cursor: pointer; text-align: left; }
-.projectList button:hover { background: rgba(255,255,255,.78); }
-.projectList .activeProject { color: #126bd0; background: #fff; box-shadow: 0 4px 14px #344b3e0a; }
-.projectList b { width: 25px; height: 25px; flex: 0 0 25px; display: grid; place-items: center; border-radius: 7px; color: #246fae; background: #e9f4ff; font-size: 11px; }
-.projectList span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.projectRow { min-width: 0; height: 40px; display: flex; align-items: center; border-radius: 10px; color: #4d5a55; transition: .16s ease; }
+.projectRow:hover { background: rgba(255,255,255,.78); }
+.projectRow.activeProject { color: #126bd0; background: #fff; box-shadow: 0 4px 14px #344b3e0a; }
+.projectSelect { min-width: 0; height: 40px; flex: 1; display: flex; align-items: center; gap: 10px; padding: 0 4px 0 10px; overflow: hidden; border: 0; color: inherit; background: transparent; font: 550 13px/1 inherit; cursor: pointer; text-align: left; }
+.projectSelect b { width: 25px; height: 25px; flex: 0 0 25px; display: grid; place-items: center; border-radius: 7px; color: #246fae; background: #e9f4ff; font-size: 11px; }
+.projectSelect span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.projectSelect .pinnedMark { width: 12px; height: 12px; flex: 0 0 12px; color: #8c98a8; }
+.projectMenuButton { width: 30px; height: 30px; flex: 0 0 30px; display: grid; place-items: center; margin-right: 4px; border: 0; border-radius: 8px; color: #788496; background: transparent; cursor: pointer; opacity: 0; transition: .16s ease; }
+.projectRow:hover .projectMenuButton, .activeProject .projectMenuButton, .projectMenuButton[data-popup-open] { opacity: 1; }
+.projectMenuButton:hover { color: #2f3b4f; background: #e9eef4; }
+.projectMenuButton svg { width: 17px; }
+.projectMenu { width: 132px !important; }
+.projectMenu [data-slot="dropdown-menu-item"] { min-height: 34px; padding: 6px 9px; gap: 8px; }
 .collapseButton { margin-top: auto; }
-.shellCollapsed .sidebar nav button, .shellCollapsed .collapseButton, .shellCollapsed .sideNewProject, .shellCollapsed .projectList button { padding: 0; justify-content: center; }
-.shellCollapsed .sidebar nav span, .shellCollapsed .collapseButton span, .shellCollapsed .sideNewProject span, .shellCollapsed .projectList span { display: none; }
+.shellCollapsed .sidebar nav button, .shellCollapsed .collapseButton, .shellCollapsed .sideNewProject, .shellCollapsed .projectSelect { padding: 0; justify-content: center; }
+.shellCollapsed .sidebar nav span, .shellCollapsed .collapseButton span, .shellCollapsed .sideNewProject span, .shellCollapsed .projectSelect span, .shellCollapsed .pinnedMark { display: none; }
+.shellCollapsed .projectMenuButton { display: none; }
 .shellCollapsed .projectSection { margin-top: 18px; }
 .shellCollapsed .moduleSection { margin-top: 18px; padding-top: 16px; }
 
@@ -288,6 +297,7 @@
   .mobileSideClose { width: 32px; height: 32px; display: grid; place-items: center; margin-left: auto; border: 0; border-radius: 8px; color: #667286; background: rgba(255,255,255,.72); }
   .mobileSideClose svg { width: 16px; }
   .collapseButton { display: none; }
+  .projectMenuButton { opacity: 1; }
   .workspace { min-height: calc(100vh - 66px); }
   .topbar { min-height: 0; padding: 10px 12px; }
   .mobileBrand { width: 100%; display: flex; align-items: center; gap: 8px; }

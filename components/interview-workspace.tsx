@@ -4,17 +4,18 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import {
   Archive, ArrowLeft, BookOpenText, Bot, ChevronDown, Code2, Download, ExternalLink, FileText,
   FolderOpen, GraduationCap, KeyRound, LoaderCircle, PanelLeftClose, PanelLeftOpen,
-  Pencil, Plus, RefreshCw, Search, Settings2, Sparkles, Trash2, Upload, UserRoundSearch, X,
+  MoreHorizontal, Pencil, Pin, PinOff, Plus, RefreshCw, Search, Settings2, Sparkles, Trash2, Upload, UserRoundSearch, X,
 } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import styles from "./interview-workspace.module.css"
 
 type Module = "coding" | "interview" | "project"
-type Project = { id: string; name: string; school: string; updatedAt: string }
+type Project = { id: string; name: string; school: string; pinnedAt: string | null; updatedAt: string }
 type Target = { id: string; projectId: string; department: string; program: string; direction: string | null; applicationYear: number; batch: "夏令营" | "预推免"; mentor: string | null; customFields: Record<string, string>; isActive: boolean }
 type Source = { id: string; projectId: string; origin: "automatic" | "user"; title: string; url: string | null; mimeType: string | null; content: string; status: string; confidence: "high" | "medium" | "low"; sourceType: string; fetchedAt: string; targetIds: string[] }
 type Question = { id: string; position: number; theme: string; question: string; summary: string | null; url: string | null; kind: string; tags: string[]; evidenceIds: string[] }
@@ -85,6 +86,7 @@ export function InterviewWorkspace() {
   const [materialsOpen, setMaterialsOpen] = useState(false)
   const [apiOpen, setApiOpen] = useState(false)
   const [promptOpen, setPromptOpen] = useState(false)
+  const [projectActionBusy, setProjectActionBusy] = useState<string | null>(null)
   const [deepseekKey, setDeepseekKey] = useState("")
   const [tavilyKey, setTavilyKey] = useState("")
   const [customPrompt, setCustomPrompt] = useState("")
@@ -140,6 +142,31 @@ export function InterviewWorkspace() {
     catch (error) { toast.error(error instanceof Error ? error.message : "删除失败") }
   }
 
+  const setProjectPinned = async (project: Project) => {
+    setProjectActionBusy(project.id)
+    try {
+      await requestJson("/api/workbench", { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ action: "setProjectPinned", projectId: project.id, pinned: !project.pinnedAt }) })
+      await load()
+      toast.success(project.pinnedAt ? "已取消置顶" : "项目已置顶")
+    } catch (error) { toast.error(error instanceof Error ? error.message : "操作失败") }
+    finally { setProjectActionBusy(null) }
+  }
+
+  const deleteProject = async (project: Project) => {
+    if (!window.confirm(`将删除“${project.name}”下的全部申请目标、资料和题单。建议先在资料库导出 ZIP。是否继续？`)) return
+    if (!window.confirm("此操作不可恢复，确认彻底删除？")) return
+    setProjectActionBusy(project.id)
+    try {
+      await requestJson(`/api/workbench?type=project&id=${encodeURIComponent(project.id)}`, { method: "DELETE", headers: jsonHeaders() })
+      await load()
+      setProjectDialog(null)
+      setMaterialsOpen(false)
+      setMobileSidebarOpen(false)
+      toast.success("备考项目已删除")
+    } catch (error) { toast.error(error instanceof Error ? error.message : "删除失败") }
+    finally { setProjectActionBusy(null) }
+  }
+
   const saveKeys = () => {
     if (deepseekKey.trim()) localStorage.setItem("baoyan-deepseek-key", deepseekKey.trim()); else localStorage.removeItem("baoyan-deepseek-key")
     if (tavilyKey.trim()) localStorage.setItem("baoyan-tavily-key", tavilyKey.trim()); else localStorage.removeItem("baoyan-tavily-key")
@@ -158,7 +185,16 @@ export function InterviewWorkspace() {
         {data.projects.length > 0 && <button className={styles.sideNewProject} onClick={() => { setMobileSidebarOpen(false); setProjectDialog("new-project") }} title="新建备考项目"><Plus /><span>新建项目</span></button>}
         <section className={styles.projectSection}>
           {!collapsed && <p>项目</p>}
-          <div className={styles.projectList}>{data.projects.map((item) => <button key={item.id} className={projectId === item.id ? styles.activeProject : ""} onClick={() => { setProjectId(item.id); setMobileSidebarOpen(false) }} title={item.name}><b>{item.school.slice(0, 1)}</b><span>{item.name}</span></button>)}</div>
+          <div className={styles.projectList}>{data.projects.map((item) => <div key={item.id} className={`${styles.projectRow} ${projectId === item.id ? styles.activeProject : ""}`}>
+            <button className={styles.projectSelect} onClick={() => { setProjectId(item.id); setMobileSidebarOpen(false) }} title={item.name}><b>{item.school.slice(0, 1)}</b><span>{item.name}</span>{item.pinnedAt && <Pin className={styles.pinnedMark} />}</button>
+            <DropdownMenu>
+              <DropdownMenuTrigger className={styles.projectMenuButton} aria-label={`${item.name}项目操作`} disabled={projectActionBusy === item.id}><MoreHorizontal /></DropdownMenuTrigger>
+              <DropdownMenuContent className={styles.projectMenu} align="end" side="right" sideOffset={6}>
+                <DropdownMenuItem onClick={() => setProjectPinned(item)}>{item.pinnedAt ? <PinOff /> : <Pin />}{item.pinnedAt ? "取消置顶" : "置顶"}</DropdownMenuItem>
+                <DropdownMenuItem variant="destructive" onClick={() => deleteProject(item)}><Trash2 />删除</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>)}</div>
         </section>
         <section className={styles.moduleSection}>
           {!collapsed && <p>三关</p>}
@@ -274,8 +310,7 @@ function ProjectDialog({ mode, open, onOpenChange, project, target, onSaved, onN
   const [customText, setCustomText] = useState(editing ? Object.entries(target?.customFields || {}).map(([key, value]) => `${key}=${value}`).join("\n") : "")
   const [busy, setBusy] = useState(false)
   const save = async () => { if (!school.trim() || !department.trim() || !program.trim() || !year || !batch) return toast.error("请填写学校、院系、项目/专业、申请年份和批次"); const customFields = Object.fromEntries(customText.split(/\r?\n/).map((line) => line.split("=")).filter((parts) => parts.length >= 2 && parts[0].trim()).map(([key, ...value]) => [key.trim(), value.join("=").trim()])); const targetPayload = { department, program, direction, applicationYear: year, batch, mentor, customFields }; const body = mode === "new-project" ? { action: "createProject", school, target: targetPayload } : mode === "new-target" ? { action: "createTarget", projectId: project?.id, target: targetPayload } : { action: "updateTarget", projectId: project?.id, targetId: target?.id, target: targetPayload }; setBusy(true); try { const result = await requestJson<{ projectId?: string; targetId?: string }>("/api/workbench", { method: "POST", headers: jsonHeaders(), body: JSON.stringify(body) }); await onSaved(result); toast.success(mode === "edit-target" ? "申请目标已更新" : "已创建") } catch (error) { toast.error(error instanceof Error ? error.message : "保存失败") } finally { setBusy(false) } }
-  const deleteProject = async () => { if (!project || !window.confirm(`将删除“${project.name}”下的全部目标、资料、简历关联与题单。建议先在资料库导出 ZIP。是否继续？`)) return; if (!window.confirm("此操作不可恢复，确认彻底删除？")) return; setBusy(true); try { await requestJson(`/api/workbench?type=project&id=${encodeURIComponent(project.id)}`, { method: "DELETE", headers: jsonHeaders() }); await onSaved(); toast.success("备考项目已删除") } catch (error) { toast.error(error instanceof Error ? error.message : "删除失败") } finally { setBusy(false) } }
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className={`${styles.dialog} ${styles.projectDialog}`}><DialogHeader><DialogTitle>{mode === "new-project" ? "新建备考项目" : mode === "new-target" ? `为 ${project?.school || "当前学校"} 新增目标` : "编辑申请目标"}</DialogTitle><DialogDescription>填写实际申请信息；学校特有内容可以放入自定义字段。</DialogDescription></DialogHeader><div className={styles.formGrid}><label className={styles.field}>学校<Input value={school} disabled={mode !== "new-project"} onChange={(event) => setSchool(event.target.value)} /></label><label className={styles.field}>院系<Input value={department} onChange={(event) => setDepartment(event.target.value)} /></label><label className={styles.field}>项目 / 专业<Input value={program} onChange={(event) => setProgram(event.target.value)} /></label><label className={styles.field}>研究方向<Input value={direction} onChange={(event) => setDirection(event.target.value)} /></label><label className={styles.field}>申请年份<Input type="number" value={year} onChange={(event) => setYear(event.target.value ? Number(event.target.value) : "")} /></label><label className={styles.field}>批次<select value={batch} onChange={(event) => setBatch(event.target.value as typeof batch)}><option value="" disabled></option><option>夏令营</option><option>预推免</option></select></label><label className={styles.field}>导师<Input value={mentor} onChange={(event) => setMentor(event.target.value)} /></label><label className={`${styles.field} ${styles.fullField}`}>自定义字段<Textarea value={customText} onChange={(event) => setCustomText(event.target.value)} /></label></div><DialogFooter>{mode === "edit-target" && <Button variant="destructive" onClick={deleteProject}><Trash2 />删除项目</Button>}{mode === "edit-target" && <Button variant="outline" onClick={onNewTarget}><Plus />新增申请目标</Button>}<Button onClick={save} disabled={busy}>{busy && <LoaderCircle className={styles.spin} />}保存</Button></DialogFooter></DialogContent></Dialog>
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className={`${styles.dialog} ${styles.projectDialog}`}><DialogHeader><DialogTitle>{mode === "new-project" ? "新建备考项目" : mode === "new-target" ? `为 ${project?.school || "当前学校"} 新增目标` : "编辑申请目标"}</DialogTitle><DialogDescription>填写实际申请信息；学校特有内容可以放入自定义字段。</DialogDescription></DialogHeader><div className={styles.formGrid}><label className={styles.field}>学校<Input value={school} disabled={mode !== "new-project"} onChange={(event) => setSchool(event.target.value)} /></label><label className={styles.field}>院系<Input value={department} onChange={(event) => setDepartment(event.target.value)} /></label><label className={styles.field}>项目 / 专业<Input value={program} onChange={(event) => setProgram(event.target.value)} /></label><label className={styles.field}>研究方向<Input value={direction} onChange={(event) => setDirection(event.target.value)} /></label><label className={styles.field}>申请年份<Input type="number" value={year} onChange={(event) => setYear(event.target.value ? Number(event.target.value) : "")} /></label><label className={styles.field}>批次<select value={batch} onChange={(event) => setBatch(event.target.value as typeof batch)}><option value="" disabled></option><option>夏令营</option><option>预推免</option></select></label><label className={styles.field}>导师<Input value={mentor} onChange={(event) => setMentor(event.target.value)} /></label><label className={`${styles.field} ${styles.fullField}`}>自定义字段<Textarea value={customText} onChange={(event) => setCustomText(event.target.value)} /></label></div><DialogFooter>{mode === "edit-target" && <Button variant="outline" onClick={onNewTarget}><Plus />新增申请目标</Button>}<Button onClick={save} disabled={busy}>{busy && <LoaderCircle className={styles.spin} />}保存</Button></DialogFooter></DialogContent></Dialog>
 }
 
 function MaterialsDialog({ open, onOpenChange, project, target, sources, latestRun, researching, setResearching, onReload, onEvidence }: { open: boolean; onOpenChange: (value: boolean) => void; project: Project | null; target: Target | null; sources: Source[]; latestRun: ResearchRun | null; researching: boolean; setResearching: (value: boolean) => void; onReload: () => Promise<void>; onEvidence: (ids: string[]) => void }) {

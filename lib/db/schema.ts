@@ -102,6 +102,7 @@ export const prepProjects = sqliteTable("prep_projects", {
   workspaceId: text("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   school: text("school").notNull(),
+  pinnedAt: text("pinned_at"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 }, (table) => [index("prep_projects_workspace_idx").on(table.workspaceId)])

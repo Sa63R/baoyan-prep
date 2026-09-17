@@ -13,6 +13,7 @@ export type PrepProject = {
   workspaceId: string
   name: string
   school: string
+  pinnedAt: string | null
   createdAt: string
   updatedAt: string
 }
@@ -60,6 +61,7 @@ export const contentHash = (content: string) => createHash("sha256").update(cont
 function projectFrom(row: RawRow): PrepProject {
   return {
     id: String(row.id), workspaceId: String(row.workspace_id), name: String(row.name), school: String(row.school),
+    pinnedAt: row.pinned_at ? String(row.pinned_at) : null,
     createdAt: String(row.created_at), updatedAt: String(row.updated_at),
   }
 }
@@ -133,7 +135,7 @@ export function workspaceOwnsTarget(workspaceId: string, targetId: string) {
 
 export function workbenchSnapshot(workspaceId: string) {
   ensureDefaultPrepProject(workspaceId)
-  const projects = (sqlite.prepare("SELECT * FROM prep_projects WHERE workspace_id = ? ORDER BY updated_at DESC").all(workspaceId) as RawRow[]).map(projectFrom)
+  const projects = (sqlite.prepare("SELECT * FROM prep_projects WHERE workspace_id = ? ORDER BY pinned_at IS NULL, pinned_at DESC, updated_at DESC").all(workspaceId) as RawRow[]).map(projectFrom)
   const targets = (sqlite.prepare("SELECT t.* FROM application_targets t JOIN prep_projects p ON p.id=t.project_id WHERE p.workspace_id=? ORDER BY t.created_at").all(workspaceId) as RawRow[]).map(targetFrom)
   const linkRows = sqlite.prepare("SELECT l.source_id, l.target_id FROM source_target_links l JOIN source_assets s ON s.id=l.source_id WHERE s.workspace_id=?").all(workspaceId) as RawRow[]
   const targetMap = new Map<string, string[]>()
