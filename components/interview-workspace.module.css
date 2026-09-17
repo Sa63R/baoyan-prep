@@ -182,9 +182,13 @@
 .backButton svg { width: 17px; }
 .materialToolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 0 14px; }
 .materialToolbar > div { display: flex; gap: 8px; }
-.materialToolbar > a { display: inline-flex; align-items: center; gap: 6px; color: #738095; font-size: 12px; text-decoration: none; }
-.materialToolbar > a:hover { color: var(--blue); }
-.materialToolbar > a svg { width: 15px; }
+.materialActions { display: flex; align-items: center; gap: 12px !important; }
+.materialActions a, .materialActions button { display: inline-flex; align-items: center; gap: 5px; border: 0; color: #738095; background: transparent; font: 12px/1 inherit; text-decoration: none; cursor: pointer; }
+.materialActions a:hover { color: var(--blue); }
+.materialActions button { color: #e5484d; }
+.materialActions button:hover { color: #c92d34; }
+.materialActions button:disabled { opacity: .55; cursor: not-allowed; }
+.materialActions svg { width: 15px; }
 .materialTabs { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
 .materialTabs > div { display: flex; }
 .materialTabs button { height: 42px; padding: 0 13px; border: 0; border-bottom: 2px solid transparent; color: #768295; background: transparent; font: 13px/1 inherit; cursor: pointer; }

@@ -115,6 +115,16 @@ export async function DELETE(request: NextRequest) {
         if (path.startsWith(`${uploadRoot}${sep}`)) await rm(path, { force: true })
       }
       sqlite.prepare("DELETE FROM source_assets WHERE id=?").run(id)
+    } else if (type === "sources") {
+      const projectId = request.nextUrl.searchParams.get("projectId") || ""
+      if (!workspaceOwnsProject(workspace.id, projectId)) throw new Error("项目不存在")
+      const paths = sqlite.prepare("SELECT local_path FROM source_assets WHERE project_id=? AND workspace_id=? AND local_path IS NOT NULL").all(projectId, workspace.id) as { local_path: string }[]
+      const uploadRoot = resolve(/* turbopackIgnore: true */ process.env.UPLOAD_DIR || "./data/uploads")
+      for (const item of paths) {
+        const path = resolve(item.local_path)
+        if (path.startsWith(`${uploadRoot}${sep}`)) await rm(path, { force: true })
+      }
+      sqlite.prepare("DELETE FROM source_assets WHERE project_id=? AND workspace_id=?").run(projectId, workspace.id)
     } else throw new Error("不支持的删除类型")
     return NextResponse.json({ deleted: true, snapshot: workbenchSnapshot(workspace.id) })
   } catch (error) {
