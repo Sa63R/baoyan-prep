@@ -8,8 +8,8 @@ import { nanoid } from "nanoid"
 import * as schema from "@/lib/db/schema"
 
 const configuredPath = process.env.DATABASE_URL || "./data/baoyan-prep.db"
-const databasePath = resolve(configuredPath.replace(/^file:/, ""))
-mkdirSync(dirname(databasePath), { recursive: true })
+const databasePath = configuredPath === ":memory:" ? ":memory:" : resolve(configuredPath.replace(/^file:/, ""))
+if (databasePath !== ":memory:") mkdirSync(dirname(databasePath), { recursive: true })
 
 export const sqlite = new Database(databasePath)
 sqlite.pragma("journal_mode = WAL")

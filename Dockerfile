@@ -13,7 +13,8 @@ RUN corepack enable
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN pnpm build
+# Next inspects route modules in parallel. Build workers do not need shared data.
+RUN DATABASE_URL=:memory: pnpm build
 
 FROM node:24-bookworm-slim AS runner
 WORKDIR /app
