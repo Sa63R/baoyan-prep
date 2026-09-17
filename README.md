@@ -1,17 +1,17 @@
 # 循证保研
 
-面向计算机相关保研考核的证据驱动准备工作台。产品先把学校、院系、项目、批次、年份和导师范围调查清楚，再把可定位的证据转成机试、专业面试和项目追问训练。所有外部事实都保留来源边界；旧年经验不会冒充当前规则，AI 审查不会冒充真实判题。
+面向计算机相关保研考核的项目化、证据驱动准备工作台。每所学校拥有独立的申请目标、资料库和三关题单；系统先收集并筛选公开资料，再生成机试、面试题单和简历项目追问。无来源内容会明确标为 AI 补充，AI 代码复盘不会冒充真实判题。
 
 ## 已实现的纵向闭环
 
-- 调查工作台：目标范围、研究状态、官方事实/经验陈述/未知、冲突与缺口、桌面证据抽屉和移动 Sheet。
-- 三类资料入口：Tavily 自动搜索适配器、带 SSRF 防护的公开 URL 正文读取、PDF/TXT/Markdown/脱敏文字导入。
-- 调查档案：Source → Evidence → Claim 结构、摘录定位、转载/内容哈希去重、Markdown 脱敏导出和浏览器打印。
-- 机试训练：题型来源标签、原创完整题面、计时、代码草稿、原 OJ 跳转、自报结果和 AI 代码审查。
-- 专业面试：学习/试卷模式、提交前隐藏要点、3 轮追问、基于实际回答的反馈与复测。
-- 项目追问：简历事实确认、导师研究证据、关联强度、未知字段和不同措辞复测。
-- 持久化与隔离：SQLite + Drizzle；随机会话 ID 经 HMAC 签名写入 HttpOnly Cookie；每条数据校验工作区所有权。
-- 安全边界：真实额度入口访问码、服务端密钥、URL 协议/DNS/重定向校验、文件类型与大小限制、私有导出脱敏、工作区与附件删除。
+- 项目工作台：ChatGPT 式侧栏切换学校项目，支持置顶、可靠删除和多个精细申请目标。
+- 项目资料库：Tavily 联网收集、URL/文本/PDF/图片导入、自动采集与用户上传分区、预览、下载和批量 ZIP。
+- 两阶段资料筛选：规范化 URL/内容指纹去重与规则预筛后，再由 DeepSeek 按目标匹配、证据等级和适用关卡复核。
+- 第一关机试：题源分类、原题链接、C++/Python/Java 草稿编辑器，以及不持久化的一次性 AI 静态复盘。
+- 第二关面试题单：按高频主题组织问题，只读版本管理，不生成标准答案。
+- 第三关项目追问：将当前脱敏简历与导师或课题组公开方向映射，只生成可能追问。
+- 证据边界：题目区分官方真题/样题、回忆题、证据推断、通用补充和 AI 生成；来源可在证据抽屉中核查。
+- 本地持久化与隔离：SQLite + Drizzle，学校项目、资料、研究任务和题单版本分开保存。
 
 ## 本地启动
 
@@ -25,7 +25,7 @@ pnpm db:migrate
 pnpm dev
 ```
 
-打开 <http://localhost:3000>。默认 `DEMO_MODE=true`，无需密钥。演示中的学校、导师、经历与网页均为虚构，界面持续显示演示标识；固定反馈明确标注“未调用模型”。
+打开 <http://localhost:3000>。默认 `DEMO_MODE=true`；要进行真实联网研究与题单生成，需要在页面的 API Key 弹窗中填写 DeepSeek/Tavily Key，或使用服务端环境变量。
 
 Windows PowerShell 可使用：
 
@@ -43,13 +43,13 @@ pnpm dev
 DEMO_MODE=false
 SESSION_SECRET=<至少 32 字节的随机字符串>
 APP_ACCESS_CODE=<保护搜索与模型额度入口的访问码>
-TAVILY_API_KEY=<服务端密钥>
-LLM_BASE_URL=https://api.openai.com/v1
+LLM_BASE_URL=https://api.deepseek.com
 LLM_API_KEY=<服务端密钥>
-LLM_MODEL=<兼容 Chat Completions 的模型名>
+LLM_MODEL=deepseek-flash
+TAVILY_API_KEY=<服务端密钥>
 ```
 
-前端“资料与来源”页只接收 `APP_ACCESS_CODE`，并仅保存在当前标签页的 `sessionStorage`。Tavily 与模型密钥从不发送到浏览器。真实模式缺配置或外部请求失败会返回明确错误，不会降级成虚构搜索结果。当前未使用任何真实密钥进行 smoke test。
+DeepSeek/Tavily Key 也可由 API Key 弹窗配置，仅保存在当前浏览器的 `localStorage`，随请求发送给本机后端；不会写入数据库、日志或导出文件。公网多人环境优先使用服务端变量和独立测试额度。真实模式缺配置或外部请求失败会返回明确错误，不会静默伪造结果。
 
 ## 存储
 
@@ -68,7 +68,7 @@ pnpm build
 pnpm test:e2e
 ```
 
-Playwright 测试覆盖三关作答、试卷答案隐藏、记录刷新后保存、会话隔离，以及 1440px/390px 核心界面。外部 API 测试使用演示 fixture，不消耗真实额度。详见 [EVALUATION.md](./EVALUATION.md)。
+当前 5 个测试文件、30 项单元测试全部通过。旧版 Playwright 脚本仍指向大改版前的页面文案，尚待更新，不能表述为当前版本 E2E 已通过。详见 [EVALUATION.md](./EVALUATION.md)。
 
 ## Docker 部署
 
@@ -80,19 +80,18 @@ Compose 将 `/app/data` 挂载到命名卷 `baoyan-data`，并通过 `/api/healt
 
 ## 主要限制
 
-- 第一版不在应用服务器执行用户代码；只有用户自报与 AI 审查，没有 `sandbox_judged` 结果。
-- PDF 仅可靠处理文本层；扫描件会返回 `needs_text`，不做假提取。
-- 自动调查默认最多 10 次搜索与 20 个页面，当前界面提供单次任务入口，尚未实现跨进程任务队列。
+- 第一版不在应用服务器执行用户代码，AI 复盘只做静态审查。
+- 图片文字提取依赖模型能力；复杂版式、低清扫描件和受限页面仍可能失败。
+- 联网研究是单次同步任务，尚未实现跨进程任务队列和自动周期采集。
 - URL 抽取使用正文启发式清洗；复杂 JavaScript 页面可能仅部分成功。
-- 尚未进行真实用户访谈、真实大学资料导入、真实 Tavily/LLM smoke test或公网部署。
+- 尚未进行正式用户访谈、系统化来源质量评测或公网部署。
 
 ## 文档
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — 架构、数据模型与信任边界
 - [DATA_SOURCES.md](./DATA_SOURCES.md) — 来源策略与真实适配器
 - [EVALUATION.md](./EVALUATION.md) — 已运行检查与限制
-- [docs/product-memo.md](./docs/product-memo.md) — 产品取舍与待验证假设
-- [docs/demo-script.md](./docs/demo-script.md) — 三分钟演示脚本
+- [submission-package/](./submission-package/) — 最终提交清单、Product Memo、邮件草稿、Demo 指南与附加材料
 - [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) — 参考与第三方许可
 
 原创代码按 Apache-2.0 许可发布。公开的是代码，不是用户数据。
