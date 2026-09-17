@@ -3,8 +3,10 @@ import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 
 const projectRoot = process.cwd()
-process.env.DATABASE_URL ||= resolve(projectRoot, "data/baoyan-prep.db")
-process.env.UPLOAD_DIR ||= resolve(projectRoot, "data/uploads")
+const localEnv = resolve(projectRoot, ".env.local")
+if (existsSync(localEnv)) process.loadEnvFile(localEnv)
+process.env.DATABASE_URL = resolve(projectRoot, (process.env.DATABASE_URL || "data/baoyan-prep.db").replace(/^file:/, ""))
+process.env.UPLOAD_DIR = resolve(projectRoot, process.env.UPLOAD_DIR || "data/uploads")
 
 const standalone = resolve(".next/standalone")
 if (!existsSync(resolve(standalone, "server.js"))) {

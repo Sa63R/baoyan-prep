@@ -53,6 +53,9 @@ export function requireSession(request: NextRequest) {
 
 export function assertServiceAccess(request: NextRequest) {
   if (demoMode()) return
+  const host = (request.headers.get("host") || request.nextUrl.host).toLowerCase()
+  const isLocalHost = /^localhost(?::\d+)?$/.test(host) || /^127\.0\.0\.1(?::\d+)?$/.test(host) || /^\[::1\](?::\d+)?$/.test(host)
+  if (process.env.LOCAL_TRUSTED_ACCESS === "true" && isLocalHost) return
   const configured = process.env.APP_ACCESS_CODE
   if (!configured) throw new Error("真实模式缺少 APP_ACCESS_CODE")
   const supplied = request.headers.get("x-app-access-code") || ""
