@@ -11,6 +11,7 @@ import {
   finalizeSourceAssessment,
   normalizeSourceUrl,
   prepareCandidatePreview,
+  schoolIdentity,
   type SourceCandidate,
   type TargetDescriptor,
 } from "@/lib/source-strategy"
@@ -89,17 +90,17 @@ export async function POST(request: NextRequest) {
     const rules = candidates.map((candidate) => assessCandidateRules(candidate, target))
     const reviewable = candidates.map((candidate, index) => ({ candidate, rule: rules[index], index })).filter((item) => !item.rule.hardReject)
       .sort((a, b) => b.rule.preliminaryScore - a.rule.preliminaryScore)
-      .slice(0, input.depth === "quick" ? 12 : input.depth === "standard" ? 30 : 54)
 
     let modelReviews = new Map<number, Awaited<ReturnType<typeof reviewSourceCandidatesWithModel>>[number]>()
     const modelScreening = hasModelApiKey(deepseekKey)
     if (modelScreening && reviewable.length) {
       const reviews = await reviewSourceCandidatesWithModel({
-        project: { school: context.project.school },
+        project: { school: schoolIdentity(context.project.school).canonical },
         target: context.target,
         candidates: reviewable.map(({ candidate, rule, index }) => ({ index, title: candidate.title, url: candidate.url, status: candidate.status, ruleSummary: rule.reason, content: prepareCandidatePreview(candidate, target) })),
       }, deepseekKey)
       modelReviews = new Map(reviews.map((review) => [review.index, review]))
+      if (modelReviews.size !== reviewable.length) throw new Error(`DeepSeek 资料审核格式不完整：应返回 ${reviewable.length} 条，实际解析到 ${modelReviews.size} 条`)
     }
 
     let added = 0
@@ -108,11 +109,7 @@ export async function POST(request: NextRequest) {
     let referenced = 0
     for (let index = 0; index < candidates.length; index += 1) {
       const candidate = candidates[index]
-      const modelReview = modelReviews.get(index)
-      const baseAssessment = finalizeSourceAssessment(candidate, rules[index], modelReview)
-      const assessment = modelScreening && !rules[index].hardReject && !modelReview
-        ? { ...baseAssessment, verdict: "reject" as const, reviewReason: "DeepSeek 未返回该候选的审核结果，已按失败关闭处理" }
-        : baseAssessment
+      const assessment = finalizeSourceAssessment(candidate, rules[index], modelReviews.get(index))
       if (assessment.verdict === "reject") { rejected += 1; continue }
       if (assessment.verdict === "reference") referenced += 1
       const confidence = assessment.qualityScore >= 78 && assessment.targetMatch >= 78 ? "high" : assessment.qualityScore >= 55 ? "medium" : "low"
@@ -134,7 +131,7 @@ export async function POST(request: NextRequest) {
       else added += 1
     }
     const ruleRejected = rules.filter((rule) => rule.hardReject).length
-    const screeningLabel = modelScreening ? "DeepSeek 二次审核完成" : "未配置 DeepSeek，已使用严格规则审核"
+    const screeningLabel = modelScreening ? `DeepSeek 二次审核 ${modelReviews.size}/${reviewable.length} 条` : "未配置 DeepSeek，已使用严格规则审核"
     const detail = `发现 ${items.length} 条；排除 ${rejected} 条（规则 ${ruleRejected}）；保留参考 ${referenced} 条；新增 ${added} 条；合并重复 ${duplicates} 条；${screeningLabel}`
     sqlite.prepare("UPDATE research_runs SET status='ready', source_count=?, detail=?, updated_at=? WHERE id=?")
       .run(added, detail, new Date().toISOString(), runId)

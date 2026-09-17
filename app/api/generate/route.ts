@@ -14,6 +14,7 @@ import {
   finalizeSourceAssessment,
   prepareCandidatePreview,
   selectSourcesForGeneration,
+  schoolIdentity,
   type SourceAssessment,
   type SourceCandidate,
   type TargetDescriptor,
@@ -54,19 +55,16 @@ export async function POST(request: NextRequest) {
         : initialRule
       return { source, candidate, rule, index }
     })
-    const reviewable = unreviewed.filter((item) => !item.rule.hardReject).sort((a, b) => b.rule.preliminaryScore - a.rule.preliminaryScore).slice(0, 42)
+    const reviewable = unreviewed.filter((item) => !item.rule.hardReject).sort((a, b) => b.rule.preliminaryScore - a.rule.preliminaryScore)
     const reviews = reviewable.length ? await reviewSourceCandidatesWithModel({
-      project: { school: context.project.school },
+      project: { school: schoolIdentity(context.project.school).canonical },
       target: context.target,
       candidates: reviewable.map(({ candidate, rule, index }) => ({ index, title: candidate.title, url: candidate.url, status: candidate.status, ruleSummary: rule.reason, content: prepareCandidatePreview(candidate, target) })),
     }, apiKey) : []
     const reviewMap = new Map(reviews.map((review) => [review.index, review]))
+    if (reviewMap.size !== reviewable.length) throw new Error(`DeepSeek 资料审核格式不完整：应返回 ${reviewable.length} 条，实际解析到 ${reviewMap.size} 条`)
     for (const item of unreviewed) {
-      const modelReview = reviewMap.get(item.index)
-      const baseAssessment = finalizeSourceAssessment(item.candidate, item.rule, modelReview)
-      const assessment = !item.rule.hardReject && !modelReview
-        ? { ...baseAssessment, verdict: "reject" as const, reviewReason: "DeepSeek 未返回该候选的审核结果，已按失败关闭处理" }
-        : baseAssessment
+      const assessment = finalizeSourceAssessment(item.candidate, item.rule, reviewMap.get(item.index))
       upsertSourceAssessment(item.source.id, input.targetId, assessment)
       assessmentMap.set(item.source.id, assessment)
     }

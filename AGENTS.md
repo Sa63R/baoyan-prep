@@ -6,6 +6,6 @@ This version has breaking changes — APIs, conventions, and file structure may 
 
 This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
 
-每次修改比较大的修改后都提交到github，删除某修按钮之类的修改算小修改，
+每次修改比较大的修改后都提交到github，删除某修按钮之类的修改算小修改，只改几行代码的算小修改，几十上百行的就算大修改了。
 
 <!-- END:nextjs-agent-rules -->
