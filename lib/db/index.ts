@@ -1,12 +1,10 @@
 import "server-only"
-import { createHash } from "node:crypto"
 import { mkdirSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import Database from "better-sqlite3"
 import { drizzle } from "drizzle-orm/better-sqlite3"
 import { eq } from "drizzle-orm"
 import { nanoid } from "nanoid"
-import { demoClaims, demoEvidences, demoSources } from "@/lib/demo-data"
 import * as schema from "@/lib/db/schema"
 
 const configuredPath = process.env.DATABASE_URL || "./data/baoyan-prep.db"
@@ -32,42 +30,35 @@ CREATE TABLE IF NOT EXISTS training_records (id TEXT PRIMARY KEY, workspace_id T
 CREATE INDEX IF NOT EXISTS records_workspace_idx ON training_records(workspace_id);
 CREATE TABLE IF NOT EXISTS attachments (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, filename TEXT NOT NULL, mime_type TEXT NOT NULL, size INTEGER NOT NULL, storage_path TEXT NOT NULL, extracted_text TEXT NOT NULL, parse_status TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS attachments_workspace_idx ON attachments(workspace_id);
+CREATE TABLE IF NOT EXISTS prep_projects (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, name TEXT NOT NULL, school TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS prep_projects_workspace_idx ON prep_projects(workspace_id);
+CREATE TABLE IF NOT EXISTS application_targets (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES prep_projects(id) ON DELETE CASCADE, department TEXT NOT NULL, program TEXT NOT NULL, direction TEXT, application_year INTEGER NOT NULL, batch TEXT NOT NULL, mentor TEXT, custom_fields TEXT NOT NULL DEFAULT '{}', is_active INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS application_targets_project_idx ON application_targets(project_id);
+CREATE TABLE IF NOT EXISTS source_assets (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, project_id TEXT NOT NULL REFERENCES prep_projects(id) ON DELETE CASCADE, origin TEXT NOT NULL, title TEXT NOT NULL, url TEXT, mime_type TEXT, local_path TEXT, content TEXT NOT NULL, content_hash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'ready', confidence TEXT NOT NULL DEFAULT 'medium', source_type TEXT NOT NULL DEFAULT '网页资料', published_at TEXT, fetched_at TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS source_assets_project_idx ON source_assets(project_id); CREATE INDEX IF NOT EXISTS source_assets_hash_idx ON source_assets(project_id, content_hash);
+CREATE TABLE IF NOT EXISTS source_target_links (source_id TEXT NOT NULL REFERENCES source_assets(id) ON DELETE CASCADE, target_id TEXT NOT NULL REFERENCES application_targets(id) ON DELETE CASCADE, PRIMARY KEY(source_id, target_id));
+CREATE TABLE IF NOT EXISTS source_assessments (source_id TEXT NOT NULL REFERENCES source_assets(id) ON DELETE CASCADE, target_id TEXT NOT NULL REFERENCES application_targets(id) ON DELETE CASCADE, verdict TEXT NOT NULL, quality_score INTEGER NOT NULL, target_match INTEGER NOT NULL, evidence_level TEXT NOT NULL, content_type TEXT NOT NULL, usable_for TEXT NOT NULL DEFAULT '[]', relevant_passages TEXT NOT NULL DEFAULT '[]', review_reason TEXT NOT NULL, model_reviewed INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, PRIMARY KEY(source_id, target_id));
+CREATE INDEX IF NOT EXISTS source_assessments_target_idx ON source_assessments(target_id, verdict, quality_score);
+CREATE TABLE IF NOT EXISTS research_runs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES prep_projects(id) ON DELETE CASCADE, target_id TEXT REFERENCES application_targets(id) ON DELETE SET NULL, depth TEXT NOT NULL, status TEXT NOT NULL, query TEXT NOT NULL, source_count INTEGER NOT NULL DEFAULT 0, detail TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS research_runs_project_idx ON research_runs(project_id);
+CREATE TABLE IF NOT EXISTS question_set_versions (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES prep_projects(id) ON DELETE CASCADE, target_id TEXT NOT NULL REFERENCES application_targets(id) ON DELETE CASCADE, module TEXT NOT NULL, title TEXT NOT NULL, source_snapshot TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS question_sets_target_idx ON question_set_versions(target_id, module);
+CREATE TABLE IF NOT EXISTS question_items (id TEXT PRIMARY KEY, version_id TEXT NOT NULL REFERENCES question_set_versions(id) ON DELETE CASCADE, position INTEGER NOT NULL, theme TEXT NOT NULL, question TEXT NOT NULL, summary TEXT, url TEXT, kind TEXT NOT NULL, tags TEXT NOT NULL DEFAULT '[]', evidence_ids TEXT NOT NULL DEFAULT '[]', metadata TEXT NOT NULL DEFAULT '{}');
+CREATE INDEX IF NOT EXISTS question_items_version_idx ON question_items(version_id);
+CREATE TABLE IF NOT EXISTS resume_assets (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL UNIQUE REFERENCES workspaces(id) ON DELETE CASCADE, filename TEXT, mime_type TEXT, local_path TEXT, content TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS faculty_subjects (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES prep_projects(id) ON DELETE CASCADE, target_id TEXT NOT NULL REFERENCES application_targets(id) ON DELETE CASCADE, kind TEXT NOT NULL, name TEXT NOT NULL, homepage TEXT, description TEXT, source_ids TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS faculty_subjects_target_idx ON faculty_subjects(target_id);
 `)
 sqlite.prepare("UPDATE research_tasks SET status = 'interrupted', updated_at = ? WHERE status IN ('plan','discover','fetch','extract','verify','synthesize')").run(new Date().toISOString())
 
 export const db = drizzle(sqlite, { schema })
-
-const hash = (content: string) => createHash("sha256").update(content).digest("hex")
 
 export function ensureWorkspace(sessionId: string) {
   const current = db.select().from(schema.workspaces).where(eq(schema.workspaces.sessionId, sessionId)).get()
   if (current) return current
   const now = new Date().toISOString()
   const workspace = { id: `ws_${nanoid(12)}`, sessionId, mode: (process.env.DEMO_MODE === "false" ? "real" : "demo") as "demo" | "real", createdAt: now }
-  db.transaction((tx) => {
-    tx.insert(schema.workspaces).values(workspace).run()
-    tx.insert(schema.targets).values({
-      id: `${workspace.id}:target`, workspaceId: workspace.id, school: "虚构理工大学", department: "计算机学院",
-      program: "智能科学与技术", degreeType: "学硕", batch: "夏令营", assessmentYear: 2026, enrollmentYear: 2027,
-      mentorName: "鲁言教授（虚构）", mentorHomepage: "/demo-sources/lab",
-    }).run()
-    for (const source of demoSources) {
-      tx.insert(schema.sources).values({
-        id: `${workspace.id}:${source.suffix}`, workspaceId: workspace.id, title: source.title, url: source.url, author: source.author,
-        publishedAt: source.publishedAt, fetchedAt: now, statedYear: source.statedYear, scope: source.scope, sourceType: source.sourceType,
-        accessStatus: source.accessStatus, contentRange: source.contentRange, contentHash: hash(source.content), visibility: "private", content: source.content,
-      }).run()
-    }
-    for (const item of demoEvidences) tx.insert(schema.evidences).values({
-      id: `${workspace.id}:${item.suffix}`, workspaceId: workspace.id, sourceId: `${workspace.id}:${item.sourceSuffix}`,
-      quote: item.quote, locator: item.locator, located: item.located, searchSnippetOnly: false,
-    }).run()
-    for (const item of demoClaims) tx.insert(schema.claims).values({
-      id: `${workspace.id}:${item.suffix}`, workspaceId: workspace.id, content: item.content, claimType: item.claimType,
-      evidenceIds: JSON.stringify(item.evidenceSuffixes.map((id) => `${workspace.id}:${id}`)), scope: item.scope,
-      verification: item.verification, conflictIds: JSON.stringify(item.conflictSuffixes),
-    }).run()
-  })
+  db.insert(schema.workspaces).values(workspace).run()
   return workspace
 }
 
